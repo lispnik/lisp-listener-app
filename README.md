@@ -23,33 +23,32 @@ it at that level.
 
 ![The debugger](doc/screenshots/debugger.png)
 
-A panel of the same restarts opens alongside, after the LispWorks notifier:
-the restarts themselves, in the order `compute-restarts` gives them, listed in
-an `NSTableView` — so whatever a handler established shows up, rather than a
-fixed set of buttons. Select one and press Invoke, or double-click it. Cancel
-— and Escape, from the listener window itself — takes the restart that returns
-you to the top level, rather than just closing the panel and leaving you at the
-`[1]` prompt.
+The same restarts open in a pane docked under the transcript, after the
+LispWorks notifier: the restarts themselves, in the order `compute-restarts`
+gives them — so whatever a handler established shows up, rather than a fixed
+set of buttons — each as its report, with its number and name set back. It
+opens on the restart that returns to the top level. Double-click a row, select
+it and press Invoke, or press **⌘ and its number**. Cancel — and Escape, from
+the prompt — returns you to the top level. The divider moves, and the pane goes
+when the debugger level does.
 
-![The restarts panel](doc/screenshots/restarts.png)
+![The restarts pane](doc/screenshots/restarts.png)
 
-Both the transcript and the panel also carry a **backtrace**, which is the
-other half of what the LispWorks Debugger tool shows: the restarts say what you
-can do, the frames say where you are. They come from SBCL's own
-`sb-debug:list-backtrace` with `:from :debugger-frame` — what SBCL's debugger
-itself uses, and what makes the result start at the frame that signalled rather
-than at `invoke-debugger` and the hook. The frames below the listener's own
-`listener-rep` are cut, since they are the same every time, and
-`lisp-listener:*backtrace-frames*` sets the depth.
+Above the restarts is the **backtrace**, which is the other half of what the
+LispWorks Debugger tool shows: the restarts say what you can do, the frames say
+where you are. On SBCL each frame opens to show its local variables as they
+were when it failed. The listener's own frames are cut, and so are the
+evaluator's under your code, and `lisp-listener:*backtrace-frames*` sets the
+depth.
 
 It is an **addition**. The transcript still prints the list, the prompt still
-takes a number, and the panel is not modal — the listener window keeps the
-keyboard, so you can type the number with the panel open. Clicking a button
-*types that number for you*: a restart has to be invoked on the listener
-thread, inside the dynamic extent of the debugger that established it, and
-that thread is already sitting in `read-line` waiting for exactly this answer.
-So there is one mechanism with two doors, not two mechanisms. Set
-`lisp-listener:*restarts-panel-enabled*` to `nil` for the transcript alone.
+takes a number, and the keyboard stays at the prompt while the pane is up.
+Choosing a restart *types its number for you*, where you can see it: a restart
+has to be invoked on the listener thread, inside the dynamic extent of the
+debugger that established it, and that thread is already sitting in
+`read-line` waiting for exactly this answer. So there is one mechanism with two
+doors, not two mechanisms. Set `lisp-listener:*restarts-panel-enabled*` to
+`nil` for the transcript alone.
 
 **New Listener (⌘N)**, in the Listener menu, opens another one. Each window has
 its own thread, its own input queue and its own transcript, and they share only
@@ -218,28 +217,26 @@ restart that needs a value asks for it there.
 
 ### Restarts that ask
 
-Some restarts do not finish the job when you take them; they start a
-conversation. `use-value` and `store-value` carry an *interactive function*,
-and SBCL's prints `Enter a form to be evaluated:` and reads one back — on
-`*query-io*`, which is this window. So the panel marks them:
+Some restarts do not finish the job when you take them; they need a value.
+`use-value` and `store-value` carry an *interactive function*, which asks for a
+form and evaluates it. The pane and the transcript both mark them with an
+ellipsis:
 
 ```
-0:   [CONTINUE]   Retry using *MISSING*.
-1:   [USE-VALUE]   Use specified value. …
-2:   [STORE-VALUE]   Set specified value and use it. …
-3:   [ABORT]   Return to the listener's top level.
+0  Retry using *MISSING*.                      CONTINUE
+1  Use specified value. …                      USE-VALUE
+2  Set specified value and use it. …           STORE-VALUE
+3  Return to the listener's top level.         ABORT
 ```
 
 The ellipsis is the Mac convention for a control that opens a prompt rather
 than acting, and it is read from the restart itself, so it appears for anything
-a handler established with an `:interactive` clause, not for a fixed list. The
-transcript's numbered list is marked the same way — two doors onto one list of
-restarts have to agree about it, or typing `1` and clicking row 1 would look
-like different acts.
+a handler established with an `:interactive` clause, not for a fixed list.
 
-Clicking such a row works exactly as clicking any other: the panel hides, the
-number is typed into the window, and the interactive function's question and
-your answer go through the transcript. One mechanism, the same two doors.
+Choosing one opens a field in the pane for the form. Return types `1 42` at the
+prompt: the debugger reads a number followed by a form as that restart with
+that value, so you can type it that way yourself too. A number alone still
+takes the restart and lets it ask in the transcript.
 
 `y-or-n-p` and `yes-or-no-p` converse in the window for the same reason.
 
