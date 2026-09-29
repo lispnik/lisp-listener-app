@@ -69,6 +69,7 @@ an SBCL built --with-sb-safepoint; see the README for why."
                  (:file "restarts-panel")
                  (:file "history-panel")
                  (:file "screenshot")
+                 (:file "debugger-test")
                  (:file "app")))))
 
 (defsystem "lisp-listener/ios"

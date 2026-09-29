@@ -273,6 +273,36 @@ jobs:
               --eval '(asdf:find-system "lisp-listener-app")' \
               --eval '(format t "~&ocicl-only: loaded ~a and found the app system~%" (asdf:component-name (asdf:find-system "objc")))'
 
+      - name: Drive the debugger pane
+        # Both architectures: the pane is all NSRects and NSRanges, which is
+        # exactly what returns differently on x86-64 and arm64.
+        working-directory: sbcl-macos
+        run: |
+          set -eux
+          set -o pipefail
+          # Everything the headless test cannot reach, because it is AppKit:
+          # docking, the frames and their locals, the keys, the divider, the
+          # value field, a second level.  RUN-DEBUGGER-TEST exits 0 only when
+          # every check held, and says which did not.
+          export LISP_LISTENER_DEBUGGER_TEST="$RUNNER_TEMP/debugger-test"
+          rm -rf "$LISP_LISTENER_DEBUGGER_TEST"
+          perl -e 'alarm shift; exec @ARGV' 240 \
+            "$SBCL_SAFEPOINT" --non-interactive \
+              --eval '(require :asdf)' \
+              --eval '(asdf:load-system "lisp-listener")' \
+              --eval '(lisp-listener:main)' 2>&1 | tee debugger-test.log
+          grep -q "debugger-test: PASS" debugger-test.log \
+            || { echo "::error::the debugger pane failed its checks" >&2
+                 grep "debugger-test: FAIL" debugger-test.log >&2 || true; exit 1; }
+
+      - name: Keep the debugger test's pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debugger-test-${{ matrix.arch }}
+          path: ${{ runner.temp }}/debugger-test/*.png
+          if-no-files-found: ignore
+
       - name: Take the screenshots
         # arm64 only: the pictures are for the README, and two of the same thing
         # would be two of the same thing.
@@ -332,15 +362,14 @@ jobs:
           # now.  A difference is not a failure -- it usually means the
           # screenshots are due to be refreshed -- but it should be visible.
           #
-          # Only these two, and that is not an oversight.  Any picture showing a
-          # restart list contains SBCL's per-thread abort restart, which reports
-          # as `abort thread (#<THREAD tid=64787 ...>)' -- a number that is
-          # different on every run.  debugger.png and restarts.png therefore
-          # CANNOT match a committed copy, ever, and warning that they differ
-          # would fire forever and teach everyone to ignore the warning.  These
-          # two carry no thread id and have been observed identical across runs,
-          # so a difference in them means something really changed.
-          for shot in session interrupt; do
+          # All four.  debugger.png and restarts.png used to be left out: every
+          # restart list ended with SBCL's per-thread abort restart, printed as
+          # `abort thread (#<THREAD tid=64787 ...>)', a number new on every run.
+          # That row now reads `Abort the listener thread' in the transcript and
+          # the pane alike, and debugger.png is taken with the pane switched
+          # off, since the pane arrives a hop after the transcript and a picture
+          # taken in between had it or not by chance.
+          for shot in session interrupt debugger restarts; do
             cmp -s "$LISP_LISTENER_SCREENSHOT/$shot.png" "doc/screenshots/$shot.png" \
               || echo "::warning::doc/screenshots/$shot.png differs from this run; refresh it"
           done

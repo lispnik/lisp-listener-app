@@ -182,12 +182,15 @@ neither has anything useful to do here."
     (refresh-paren-highlight view pointer))
   string)
 
-(defun submit-input (view pointer)
+(defun submit-input (view pointer &key (record t))
   "Send the pending input to the listener thread.
 
 The newline the user pressed goes into the transcript here rather than through
 -insertText:, and INPUT-START moves past it, so everything submitted becomes
-read-only in the same breath.  Nothing is echoed: it is already on screen."
+read-only in the same breath.  Nothing is echoed: it is already on screen.
+
+RECORD NIL keeps the line out of the history: the restarts panel types the
+restart's number here, and a history full of `3' would be no use to anyone."
   (let ((text (pending-input view pointer)))
     ;; The tint goes with the line: what was the input region is transcript from
     ;; here on, and a highlight there would sit on text nobody can edit.
@@ -196,7 +199,8 @@ read-only in the same breath.  Nothing is echoed: it is already on screen."
     (setf (view-history-index view) nil)
     (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) text))
           (history (view-history view)))
-      (when (and (plusp (length trimmed))
+      (when (and record
+                 (plusp (length trimmed))
                  (not (and history (string= trimmed (first history)))))
         (push trimmed (view-history view))
         ;; Saved as it is submitted, not when the application quits; see

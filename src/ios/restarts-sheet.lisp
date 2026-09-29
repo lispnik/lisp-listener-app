@@ -24,12 +24,14 @@
 
 (in-package #:lisp-listener)
 
-(defparameter *sheet-row-height* 52d0)
+(defparameter *sheet-row-height* 64d0
+  "Two lines of report and the number and name under them.")
 (defparameter *sheet-margin* 16d0)
 (defparameter *sheet-header-height* 52d0)
 (defparameter *sheet-button-height* 44d0)
 (defparameter *sheet-title-font-size* 17d0)
-(defparameter *sheet-row-font-size* 13d0)
+(defparameter *sheet-row-font-size* 15d0)
+(defparameter *sheet-heading-font-size* 13d0)
 
 ;;; The table's data source and delegate --------------------------------------
 ;;;
@@ -51,8 +53,8 @@
   (handler-case
       (let* ((row (objc:invoke index-path "row"))
              (titles (controller-titles self))
-             (title (and (>= row 0) (< row (length titles)) (nth row titles))))
-        (make-restart-cell (or title "")))
+             (restart (and (>= row 0) (< row (length titles)) (nth row titles))))
+        (if restart (make-restart-cell restart) (cffi:null-pointer)))
     (error (condition)
       (note "cellForRowAtIndexPath: ~a" condition)
       (cffi:null-pointer))))
@@ -64,26 +66,37 @@
   (declare (ignorable table))
   (handler-case
       (let ((*listener* (or (controller-listener self) *listener*)))
-        (choose-restart (objc:invoke index-path "row")))
+        (activate-restart (objc:invoke index-path "row")))
     (error (condition) (note "didSelectRowAtIndexPath: ~a" condition))))
 
-(defun make-restart-cell (title)
-  "One row, AUTORELEASED.
+(defun make-restart-cell (row)
+  "One row, AUTORELEASED: the restart's report, and under it, small and grey,
+its number and name -- the Mac's three columns, stacked for a phone's width.
+A row outside the listener, the thread's own abort, is grey throughout.
 
 Autoreleased for the reason the Mac's row views are: an object returned from a
 Lisp method is the caller's to release, UIKit asks again on every redraw, and a
 +1 object here would leak one per row per reload."
-  (let ((cell (objc:invoke (objc:invoke "UITableViewCell" "alloc")
-                           "initWithStyle:reuseIdentifier:" 0 "restart"))
-        (label nil))
-    (setf label (objc:invoke cell "textLabel"))
-    (objc:invoke label "setText:" title)
-    (objc:invoke label "setFont:" (uikit:mono-font *sheet-row-font-size*))
+  (let* ((cell (objc:invoke (objc:invoke "UITableViewCell" "alloc")
+                            "initWithStyle:reuseIdentifier:"
+                            3 "restart"))   ; UITableViewCellStyleSubtitle
+         (label (objc:invoke cell "textLabel"))
+         (detail (objc:invoke cell "detailTextLabel"))
+         (secondary (objc:invoke "UIColor" "secondaryLabelColor")))
+    (objc:invoke label "setText:"
+                 (format nil "~a~@[ …~]" (restart-row-report row) (restart-row-asks-p row)))
+    (objc:invoke label "setFont:" (uikit:font *sheet-row-font-size*))
+    (when (restart-row-outside-p row)
+      (objc:invoke label "setTextColor:" secondary))
     ;; Two lines, then the tail is truncated: a restart's report can be far
     ;; wider than a phone, and one row growing to five lines would push the
     ;; others off the sheet.
     (objc:invoke label "setNumberOfLines:" 2)
     (objc:invoke label "setLineBreakMode:" 4)   ; NSLineBreakByTruncatingTail
+    (objc:invoke detail "setText:"
+                 (format nil "~d · ~a" (restart-row-index row) (restart-row-name row)))
+    (objc:invoke detail "setFont:" (uikit:mono-font (- *sheet-row-font-size* 2)))
+    (objc:invoke detail "setTextColor:" secondary)
     (objc:autorelease cell)))
 
 ;;; The sheet -----------------------------------------------------------------
@@ -97,22 +110,88 @@ it opens at.  The table scrolls, so a long list is not a taller sheet."
      (* 3 *sheet-margin*)
      (* (max 2 count) *sheet-row-height*)))
 
-(defun make-sheet-header (heading)
-  "A title and the condition's one-line summary, stacked."
+(defun make-sheet-header (heading field)
+  "A title that says the debugger level, the condition, and FIELD -- hidden
+until a restart asks for a value -- stacked.  A hidden arranged view takes no
+room, so the header is the same height until then."
   (let ((stack (uikit:new "UIStackView"))
         (title (uikit:new "UILabel"))
         (message (uikit:new "UILabel")))
     (objc:invoke stack "setAxis:" 1)              ; vertical
     (objc:invoke stack "setSpacing:" 2d0)
-    (objc:invoke title "setText:" "Restarts")
+    (objc:invoke title "setText:" (heading-title heading))
     (objc:invoke title "setFont:" (uikit:bold-font *sheet-title-font-size*))
-    (objc:invoke message "setText:" heading)
-    (objc:invoke message "setFont:" (uikit:mono-font *sheet-row-font-size*))
+    (objc:invoke message "setText:" (heading-line heading))
+    (objc:invoke message "setFont:" (uikit:mono-font *sheet-heading-font-size*))
     (objc:invoke message "setTextColor:" (objc:invoke "UIColor" "secondaryLabelColor"))
     (objc:invoke message "setNumberOfLines:" 2)
     (objc:invoke stack "addArrangedSubview:" title)
     (objc:invoke stack "addArrangedSubview:" message)
+    (objc:invoke stack "setCustomSpacing:afterView:" 10d0 message)
+    (objc:invoke stack "addArrangedSubview:" field)
     stack))
+
+(defun make-value-field (target)
+  "Where a restart's value is typed.  Return in it sends: see
+-textFieldShouldReturn:.  None of UIKit's help with prose, which would turn a
+quote into a curly one and capitalise the first symbol."
+  (let ((field (uikit:new "UITextField")))
+    (objc:invoke field "setBorderStyle:" 3)             ; UITextBorderStyleRoundedRect
+    (objc:invoke field "setFont:" (uikit:mono-font *sheet-row-font-size*))
+    (objc:invoke field "setAutocorrectionType:" 1)      ; No
+    (objc:invoke field "setAutocapitalizationType:" 0)  ; None
+    (objc:invoke field "setSmartQuotesType:" +ui-text-smart-no+)
+    (objc:invoke field "setSmartDashesType:" +ui-text-smart-no+)
+    (objc:invoke field "setReturnKeyType:" 9)           ; UIReturnKeyDone
+    (objc:invoke field "setDelegate:" target)
+    (objc:invoke field "setHidden:" t)
+    field))
+
+(defun request-restart-value (listener index)
+  "Ask, in the sheet, for the value restart INDEX wants.  Thread 1.
+
+As on the Mac, and for the same reason: choosing USE-VALUE used to leave the
+sheet and ask in the transcript, so the choice began in one place and ended in
+another.  Return sends `1 42', which the debugger reads as the restart and its
+value in one line."
+  (let* ((controller (getf (listener-retained listener) :restarts-controller))
+         (field (and controller (getf (controller-views controller) :value-field)))
+         (row (and controller (nth index (controller-titles controller)))))
+    (when (and field row)
+      (setf (getf (controller-views controller) :value-index) index)
+      (objc:invoke field "setPlaceholder:"
+                   (format nil "~a: a form, evaluated in the listener"
+                           (restart-row-name row)))
+      (objc:invoke field "setText:" "")
+      (objc:invoke field "setHidden:" nil)
+      (objc:invoke field "becomeFirstResponder")
+      t)))
+
+(defun submit-restart-value (listener)
+  "Take the restart that asked, with the form in the field.  Thread 1.
+An empty field sends nothing."
+  (let* ((controller (getf (listener-retained listener) :restarts-controller))
+         (views (and controller (controller-views controller)))
+         (index (getf views :value-index))
+         (field (getf views :value-field))
+         (text (and index field
+                    (string-trim '(#\Space #\Tab #\Newline)
+                                 (or (ignore-errors
+                                      (objc:ns-string-to-string (objc:invoke field "text")))
+                                     "")))))
+    (when (and text (plusp (length text)))
+      (objc:invoke field "resignFirstResponder")
+      (let ((*listener* listener))
+        (choose-restart index text))
+      t)))
+
+(objc:define-objc-method ("textFieldShouldReturn:" objc:objc-bool)
+    ((self restarts-controller) (field objc:objc-object-pointer))
+  (declare (ignorable field))
+  (handler-case
+      (progn (submit-restart-value (or (controller-listener self) *listener*))
+             nil)
+    (error (condition) (note "textFieldShouldReturn: ~a" condition) nil)))
 
 (defun configure-sheet-detents (controller count)
   "Open at half the screen, and let it be dragged to full height.
@@ -143,12 +222,14 @@ for why they cannot be printed here."
          (root (objc:invoke controller "view"))
          (data-source (getf (listener-retained listener) :restarts-controller))
          (target (and data-source (objc:objc-object-pointer data-source)))
-         (header (make-sheet-header heading))
+         (field (make-value-field target))
+         (header (make-sheet-header heading field))
          (table (uikit:new "UITableView"))
          (cancel (uikit:system-button "Cancel")))
     (when data-source
       (setf (controller-titles data-source) titles
-            (controller-cancel-index data-source) cancel-index))
+            (controller-cancel-index data-source) cancel-index
+            (controller-views data-source) (list :value-field field :value-index nil)))
     (objc:invoke root "setBackgroundColor:"
                  (objc:invoke "UIColor" "systemBackgroundColor"))
     (objc:invoke table "setDataSource:" target)

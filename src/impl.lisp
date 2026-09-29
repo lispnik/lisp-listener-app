@@ -25,21 +25,99 @@ that is what catches the nested one.  See LISTENER-LOOP."
           ,hook))
      ,@body))
 
-(defun backtrace-frames (count)
-  "Up to COUNT frames beneath the debugger, innermost first, each a list whose
-first element names the function.
+(defmacro with-fresh-stack-top (() &body body)
+  "Run BODY -- what is evaluated at a debugger prompt -- with SBCL's record of
+where the current debugger's stack starts cleared.
 
-On SBCL, :FROM :DEBUGGER-FRAME is what SBCL's own debugger uses: it starts at
-the frame that signalled and skips INVOKE-DEBUGGER and the hooks.  ECL has no
-such option, so its frames are cut after INVOKE-DEBUGGER by hand, and only the
-function is known -- ECL's frame stack does not keep the arguments."
-  #+sbcl (sb-debug:list-backtrace :count count :from :debugger-frame)
+INVOKE-DEBUGGER binds SB-DEBUG:*STACK-TOP-HINT* to the frame that failed and
+calls the hook inside that binding, so a form evaluated at [1] runs inside it
+too.  ERROR only sets the hint when it is NIL, so an error in that form would
+reach level 2 carrying level 1's frame, and BACKTRACE-FRAMES would start there.
+SBCL's own debugger binds it to NIL for the same reason.  ECL keeps no such
+thing."
+  #+sbcl `(let ((sb-debug:*stack-top-hint* nil)) ,@body)
+  #-sbcl `(progn ,@body))
+
+(defun backtrace-frames (count)
+  "Up to COUNT frames beneath the debugger, innermost first.  Each is
+(CALL . LOCALS): CALL a list whose first element names the function, and
+LOCALS the frame's valid local variables as (SYMBOL . VALUE) -- which exist
+only here, while the stack does, so they are taken now or never.
+
+On SBCL it starts from the frame INVOKE-DEBUGGER resolved before calling the
+hook -- SB-DEBUG:*STACK-TOP-HINT*, the frame that signalled -- which skips
+INVOKE-DEBUGGER and the hooks.  Not :FROM :DEBUGGER-FRAME, which is right only
+inside SBCL's own debugger: outside it, that falls back to the most recent
+INTERRUPTED frame on the stack, and at a second debugger level the first
+error's trap is still there.  An error typed at [1] after an unbound variable
+got the unbound variable's backtrace.
+
+ECL has no such option, so its frames are cut by hand, after the listener's
+debugger hook.  Not after INVOKE-DEBUGGER, which is what this used to look for:
+that is not on ECL's frame stack at all, so nothing was cut and every backtrace
+began with BACKTRACE-FRAMES and the listener's own debugger.  Only the function
+is known -- ECL's frame stack keeps neither the arguments nor the locals."
+  #+sbcl
+  (let ((frames '()))
+    (sb-debug:map-backtrace
+     (lambda (frame)
+       (push (cons (sb-debug::frame-call-as-list frame sb-debug::*default-argument-limit*)
+                   (frame-locals frame))
+             frames))
+     :count count
+     :from (if (sb-di:frame-p sb-debug:*stack-top-hint*)
+               sb-debug:*stack-top-hint*
+               (sb-debug::backtrace-start-frame :debugger-frame)))
+    (nreverse frames))
   #+ecl
   (let* ((frames (loop for index from (si::ihs-top) downto 1
-                       collect (list (ecl-function-name (si::ihs-fun index)))))
-         (debugger (position 'invoke-debugger frames :key #'first)))
+                       collect (list (list (ecl-function-name (si::ihs-fun index))))))
+         (debugger (position-if (lambda (function)
+                                  (member function '(invoke-debugger
+                                                     listener-debugger-hook)))
+                                frames :key #'caar)))
     (subseq frames (if debugger (1+ debugger) 0)
             (min (length frames) (+ (if debugger (1+ debugger) 0) count)))))
+
+#+sbcl
+(defun frame-locals (frame)
+  "FRAME's local variables that hold a value where it stopped, as
+(SYMBOL . VALUE), in SBCL's order.  What SBCL's own LIST-LOCALS prints, less
+the &MORE bookkeeping variables, which are the compiler's rather than yours.
+NIL when the function was compiled without debug information."
+  (ignore-errors
+   (let ((function (sb-di:frame-debug-fun frame))
+         (location (sb-di:frame-code-location frame)))
+     (when (sb-di:debug-var-info-available function)
+       (multiple-value-bind (more-context more-count)
+           (sb-di:debug-fun-more-args function)
+         (loop for variable in (sb-di:ambiguous-debug-vars function "")
+               when (and (not (eq variable more-context))
+                         (not (eq variable more-count))
+                         (eq :valid (sb-di:debug-var-validity variable location)))
+                 collect (cons (sb-di:debug-var-symbol variable)
+                               (sb-di:debug-var-value variable frame))))))))
+
+(defun internal-frame-p (call)
+  "Whether CALL, a frame's call list, is the implementation evaluating a form
+typed at the prompt -- its evaluator, its compile-on-the-fly, EVAL -- rather
+than the code that failed.  By the PACKAGE of the function's name, so SBCL's
+next rearrangement of its evaluator does not need a new list here.  A local
+function counts by the function it is in: (FLET G :IN SB-C::%COMPILE-IN-LEXENV)."
+  (let* ((name (and (consp call) (first call)))
+         (symbol (cond ((symbolp name) name)
+                       ((consp name)
+                        (let ((in (member :in name)))
+                          (and in (symbolp (second in)) (second in))))))
+         (package (and symbol (symbol-package symbol))))
+    (and symbol
+         (or (eq symbol 'eval)
+             (and package
+                  (member (package-name package)
+                          #+sbcl '("SB-IMPL" "SB-C" "SB-INT" "SB-EVAL" "SB-KERNEL")
+                          #+ecl '("SI" "SYSTEM")
+                          #-(or sbcl ecl) '()
+                          :test #'string=))))))
 
 #+ecl
 (defun ecl-function-name (function)
@@ -106,8 +184,10 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 ;; parenthesis, and the chance to rebuild cached key commands
                 ;; after *PAREDIT-KEYS* changes.
                 paren-background-color invalidate-key-commands
-                ;; The restarts, on screen: build and show, take down, ask.
+                ;; The restarts, on screen: build and show, take down, ask; and
+                ;; ask for the value a restart like USE-VALUE wants.
                 show-restarts-panel hide-restarts-panel restarts-panel-visible-p
+                request-restart-value
                 ;; The history list, the same three ways.
                 show-history-popup hide-history-popup history-popup-visible-p
                 ;; Which listener a menu item or a key means.

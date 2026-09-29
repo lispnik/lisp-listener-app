@@ -184,7 +184,16 @@ Main thread only.  Returns LISTENER."
       (objc:invoke scroll "setHasVerticalScroller:" t)
       (objc:invoke scroll "setAutoresizingMask:" +ns-view-width-and-height-sizable+)
       (objc:invoke scroll "setDocumentView:" view)
-      (objc:invoke window "setContentView:" scroll)
+      ;; A split view, with the transcript as its only pane until a debugger
+      ;; level opens: the restarts are docked under it, not in a window of
+      ;; their own (see src/macos/restarts-panel.lisp).
+      (let ((split (objc:invoke (objc:invoke "NSSplitView" "alloc") "initWithFrame:" frame)))
+        (objc:invoke split "setVertical:" nil)
+        (objc:invoke split "setDividerStyle:" 2)   ; NSSplitViewDividerStyleThin
+        (objc:invoke split "setAutoresizingMask:" +ns-view-width-and-height-sizable+)
+        (objc:invoke split "addSubview:" scroll)
+        (objc:invoke window "setContentView:" split)
+        (objc:release split))
       (objc:invoke window "setInitialFirstResponder:" view)
       (objc:invoke window "setDelegate:" (objc:objc-object-pointer delegate))
       (objc:invoke window "center")

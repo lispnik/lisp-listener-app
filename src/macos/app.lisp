@@ -76,6 +76,15 @@ with NIL and builds a fresh one.")
       (note "self-test: ~a" condition)
       (objc:invoke (objc.runloop:shared-application) "terminate:" nil))))
 
+(objc:define-objc-method ("listenerDebuggerTest:" :void)
+    ((self listener-controller) (timer objc:objc-object-pointer))
+  (declare (ignorable timer))
+  ;; Like RUN-SCREENSHOTS, RUN-DEBUGGER-TEST exits with its verdict.
+  (handler-case (run-debugger-test)
+    (error (condition)
+      (note "debugger-test: ~a" condition)
+      (finish-and-exit 4))))
+
 (objc:define-objc-method ("listenerScreenshots:" :void)
     ((self listener-controller) (timer objc:objc-object-pointer))
   (declare (ignorable timer))
@@ -253,6 +262,9 @@ so nothing driven from this point could pump anything."
 (defun schedule-screenshots (seconds)
   (schedule-after seconds "listenerScreenshots:"))
 
+(defun schedule-debugger-test (seconds)
+  (schedule-after seconds "listenerDebuggerTest:"))
+
 ;;; Entry points --------------------------------------------------------------
 
 (defun main ()
@@ -274,6 +286,7 @@ Does not return: -[NSApplication run] does not."
   (build-listener)
   (cond
     ((uiop:getenv "LISP_LISTENER_SCREENSHOT") (schedule-screenshots 1.0))
+    ((uiop:getenv "LISP_LISTENER_DEBUGGER_TEST") (schedule-debugger-test 1.0))
     ((uiop:getenv "LISP_LISTENER_SELFTEST") (schedule-self-test 1.5)))
   (objc.runloop:run-cocoa-application))
 

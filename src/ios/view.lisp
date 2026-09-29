@@ -271,6 +271,12 @@ time: a pointer made at load time would not survive into the app.")
                              (key-command (string #\Return) "listenerNewline:"
                                           +ui-key-modifier-alternate+)))
                 (objc:invoke array "addObject:" command))
+              ;; ⌘0 to ⌘9 choose a restart while the sheet is up, as on the
+              ;; Mac.  Harmless otherwise: the IMP does nothing then.
+              (dotimes (digit 10)
+                (objc:invoke array "addObject:"
+                             (key-command (format nil "~d" digit) "listenerRestartKey:"
+                                          +ui-key-modifier-command+)))
               ;; And one per CHORD in *PAREDIT-KEYS*.  The bare characters are
               ;; not here: they arrive as text, through the delegate below.
               (dolist (spec (mapcar #'car *paredit-keys*))
@@ -337,6 +343,16 @@ key in that position on a keyboard attached to an iPad."
 
 (define-listener-method ("listenerHistory:" :void) ((sender objc:objc-object-pointer))
   (open-history-popup *listener*))
+
+;;; Defined in restarts-sheet.lisp, which loads after this file.
+(declaim (ftype function restarts-table-row-count))
+
+(define-listener-method ("listenerRestartKey:" :void) ((command objc:objc-object-pointer))
+  (let* ((input (ignore-errors (objc:ns-string-to-string (objc:invoke command "input"))))
+         (index (and input (= 1 (length input)) (digit-char-p (char input 0))))
+         (count (restarts-table-row-count *listener*)))
+    (when (and index count (restarts-panel-visible-p *listener*) (< index count))
+      (activate-restart index *listener*))))
 
 (define-listener-method ("listenerNewline:" :void) ((sender objc:objc-object-pointer))
   (insert-indented-newline self pointer))

@@ -130,7 +130,7 @@ order is load-bearing**:
   sexp paredit keymap indent transcript completion paren-highlight paredit-view
   history-search streams config restarts repl`. No toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
-  screenshot app`. The name it always had.
+  history-panel screenshot debugger-test app`. The name it always had.
 - `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet app`.
 
 `tools/compile-check.lisp` and `tools/headless-test.lisp` each carry the same
@@ -194,20 +194,54 @@ NSTextView and UITextView share.
   thousand `write-char`s into one hop to the main thread.
 - `src/restarts.lisp` — what the restarts panel does, on either platform: the
   titles, which restart Cancel means, and the hop to put them up and take them down.
-- `src/repl.lisp` — the listener thread, the debugger and the backtrace.
+- `src/repl.lisp` — the listener thread, the debugger and the backtrace. Each
+  frame is captured with its locals (`backtrace-frame`), printed on the listener
+  thread while the stack exists; SBCL only, since ECL's frame stack keeps
+  neither arguments nor locals. The run of the implementation's own evaluator
+  at the bottom (`internal-frame-p`, by package) is trimmed when anything is
+  left above it.
 - `src/macos/view.lisp` — `LispListenerView` over `NSTextView`: Return, the
   arrows, and Tab through NSTextView's own completion popup.
-- `src/macos/restarts-panel.lisp` — the LispWorks-style `NSPanel`: an
-  `NSTableView` of whatever `compute-restarts` returned, plus Cancel and Invoke.
+- `src/macos/restarts-panel.lisp` — the debugger, **docked**: the listener
+  window's content is an `NSSplitView`, and while a debugger level is open a
+  pane sits under the transcript -- the heading, the frames as an
+  `NSOutlineView` whose rows open to their locals, an `NSTableView` of whatever
+  `compute-restarts` returned, and Cancel and Invoke. The divider moves;
+  `layout-restarts-panel` places everything again on each
+  `NSViewFrameDidChangeNotification`, since the heading's height depends on how
+  its report wraps. The rows and heading arrive as
+  `restart-row`s and a `debugger-heading` from `src/restarts.lisp`, printed on the
+  listener thread; the row past the listener's own top-level restart (SBCL's
+  per-thread abort) is relabelled "Abort the listener thread" in the panel and
+  the transcript alike. It opens on the top-level row, not row 0. ⌘0–⌘9 choose
+  a row from the listener window (`-performKeyEquivalent:` on the view, since
+  the panel never takes the keyboard). A restart that asks for a value
+  (USE-VALUE, STORE-VALUE) asks **in the panel**: a field opens, and Return
+  types `1 42` at the prompt — the debugger reads a number followed by a form
+  as that restart with that value (`restart-selection`). Every choice is
+  typed through the view by `type-into-listener`, so the transcript shows it,
+  whatever was half-typed is put back, and the history is not touched.
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
   produces `doc/screenshots/`, on a CI runner, on every push.
+- `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the
+  docked debugger through what a person does with it and checks each step:
+  docking, frames and locals, the keys, the divider, the value field, Escape,
+  a second level. Exits 0 only if every check held; `macos.yml` runs it on
+  both architectures. **Everything in the pane is AppKit, so the headless test
+  reaches none of it**; every bug in the pane's first versions was found by
+  this driver and by nothing else. Run it locally with
+  `LISP_LISTENER_DEBUGGER_TEST=/tmp/dt sbcl --eval '(asdf:load-system "lisp-listener")' --eval '(lisp-listener:main)'`.
 - `src/ios/view.lisp` — `LispListenerView` over `UITextView`: Return through the
-  delegate, `UIKeyCommand`s for Tab, ↑, ↓, Esc, ⌘. and ⌘K, and a key bar with the
-  same keys above the on-screen keyboard.
-- `src/ios/restarts-sheet.lisp` — the restarts as a sheet: a `UIViewController`
+  delegate, `UIKeyCommand`s for Tab, ↑, ↓, Esc, ⌘., ⌘K and ⌘0–⌘9 (a restart,
+  while the sheet is up), and a key bar with the same keys above the on-screen
+  keyboard.
+- `src/ios/restarts-sheet.lisp` — the restarts as a sheet, each row the report
+  over its number and name (the subtitle cell style): a `UIViewController`
   with a `UITableView` whose data source is the same `restarts-controller` the
   Mac's table uses, presented at `UISheetPresentationController`'s medium
-  detent and draggable to full height.
+  detent and draggable to full height. A restart that asks for a value asks
+  in a `UITextField` under the heading, hidden until then; Return sends
+  `1 42`, as on the Mac.
 - `src/ios/app.lisp` — `ios-start`, and the self-test.
 
 `lisp-alien.png` is the icon's source art, and `res/` is what the two builders
@@ -327,6 +361,47 @@ Each of these is a bug that actually happened here.
   believes it is nine columns in — so `fresh-line` emits a newline that is
   already on screen and every value gets a blank line above it.
 
+- **Start a backtrace from `sb-debug:*stack-top-hint*`, not `:from
+  :debugger-frame`.** Outside SBCL's own debugger, `:debugger-frame` falls back
+  to the most recent *interrupted* frame on the stack, and at a second debugger
+  level the first error's trap (an unbound variable, say) is still down there:
+  every level-2 backtrace was level 1's. And bind the hint to NIL around what is
+  evaluated at a debugger prompt (`with-fresh-stack-top`), or `error` there
+  inherits level 1's frame. `case-nested-backtrace` covers both; two calls to
+  `error` pass without either fix, so it errors on an unbound variable first.
+
+- **ECL's frame stack holds a closure's CODE, not the closure.** So an
+  anonymous debugger hook could be found neither by name nor by `eq`, and ECL's
+  cut after `invoke-debugger` -- which is not on its frame stack at all -- cut
+  nothing: every ECL backtrace began with `BACKTRACE-FRAMES` and the listener's
+  own debugger. The hook is the named function `listener-debugger-hook`, and
+  ECL's frames are cut at its name.
+
+- **The debugger's `read-line` needs the column reset too.** The fix for a
+  blank line above every value was made in `listener-rep`, and the debugger
+  reads its own lines, so everything evaluated at `[1]` had one.
+  `case-no-blank-line` checks both places.
+
+- **A key equivalent sent to an inactive process reaches nothing.**
+  `-[NSApplication sendEvent:]` gives ⌘-keys to the key window, and an SBCL
+  started from a terminal is not the active application, so it has none. A
+  driver has to call the window's `-performKeyEquivalent:` and then the main
+  menu's, which is the order AppKit uses. Menu actions that ask
+  `current-listener` do nothing there for the same reason.
+
+- **A button's key equivalent beats the text view to the key.** Docked in the
+  listener window, Invoke's Return would have been pressed by every Return typed
+  at `[1]`. The pane's buttons have no key equivalents; Escape reaches the text
+  view's `-complete:` as always, ⌘0–⌘9 come through `-performKeyEquivalent:`, and
+  the table and the outline `setRefusesFirstResponder:` so a click leaves the
+  keyboard at the prompt. (That setting governs clicks only;
+  `-makeFirstResponder:` still obeys, so test it with `-acceptsFirstResponder`.)
+
+- **Set a lone table column's width outright.** `-sizeLastColumnToFit` left the
+  outline's column at its default hundred points, and every frame came out as
+  `0: (SIMPLE…`. The restart table escaped only because its column was made at
+  a width near the right one.
+
 - **On iOS, Interrupt can only reach a listener that is WAITING.** A running
   computation cannot be stopped at all: in the app this ECL delivers no
   interrupt to a thread -- measured on a plain spinning thread, not just on the
@@ -437,11 +512,15 @@ Each of these is a bug that actually happened here.
   rather than failing, so the workflow never reports at all. This is the most
   expensive mistake available in the workflow, because it looks like a slow queue.
 
-- **Two of the four screenshots can never be byte-compared.** `debugger.png` and
-  `restarts.png` show a restart list, every restart list ends with SBCL's
-  per-thread abort restart, and that prints a fresh `tid` on every run. Only
-  `session.png` and `interrupt.png` are deterministic; comparing the other two
-  fires a "refresh it" warning forever.
+- **The screenshots are compared only if nothing in them varies by chance.**
+  `debugger.png` and `restarts.png` were once left out of the comparison: the
+  restart list ended with SBCL's per-thread abort restart, whose report prints a
+  fresh `tid`. That row is relabelled now, and `debugger.png` is taken with the
+  pane switched off (`*restarts-panel-enabled*`, SETF'd -- the listener thread
+  reads it), because the pane arrives a hop after the transcript and a picture
+  taken in between had it or not. Taken locally, all four still differ from run
+  to run if you are using the machine: a window that happens to be key draws
+  coloured traffic lights and a caret.
 
 - **Write CI scratch files to `$RUNNER_TEMP`,** and screenshots too. Writing them
   under `doc/screenshots/` makes `test -s` pass against the *committed* files and

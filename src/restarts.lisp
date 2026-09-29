@@ -20,9 +20,11 @@
 ;;;; listener thread, inside the dynamic extent of the debugger that established
 ;;;; it -- transfer control from the wrong thread and it is not that restart at
 ;;;; all.  The listener thread is already sitting in READ-LINE waiting for
-;;;; exactly this answer, so the button pushes the number into the input queue
-;;;; and the existing path does the rest.  No second mechanism, no cross-thread
-;;;; control transfer, and nothing new that can deadlock.
+;;;; exactly this answer, so the button types the number at the prompt and
+;;;; presses Return, and the existing path does the rest.  No second mechanism,
+;;;; no cross-thread control transfer, and nothing new that can deadlock.  A
+;;;; restart that wants a value is answered the same way, with `1 42': the
+;;;; panel asks for the form, and the line carries both.
 ;;;;
 ;;;; This file is what the two front ends share: the titles, which restart
 ;;;; Cancel means, and the hop to put them up and take them down.  The panel
@@ -58,24 +60,53 @@ to reach the listener that established the restarts, and `whichever window is
 in front' would be the wrong answer: a background window is perfectly able to
 be the one sitting in the debugger.")
    (titles :initform '() :accessor controller-titles
-           :documentation "The rows the table is showing.
+           :documentation "The rows the table is showing, RESTART-ROWs.
 
 Held on the controller because a data source is asked for its rows whenever
 AppKit feels like redrawing, long after the panel was built.  One debugger
 level has a panel at a time, so one list is enough; HIDE-RESTARTS-PANEL
-clears it."))
+clears it.")
+   (views :initform '() :accessor controller-views
+          :documentation "The front end's own widgets for the panel on screen,
+as a plist, for whatever has to find them again -- the Mac lays its panel out
+afresh on every resize."))
   (:objc-class-name "LispListenerRestartsController"))
 
-(defun choose-restart (index)
-  "Take restart INDEX.  Thread 1.
+(defun type-into-listener (listener line)
+  "Type LINE at LISTENER's prompt and press Return, as a person would.  Thread 1.
+
+Through the view, so the transcript shows what was chosen -- `[1] CL-USER> 3'
+-- exactly as if it had been typed; and whatever the person HAD typed there
+is put back afterwards rather than sent along with it.  With no view, straight
+onto the input queue."
+  (let ((view (listener-view-object listener))
+        (pointer (listener-view listener)))
+    (if (and view pointer)
+        (let ((pending (pending-input view pointer)))
+          (replace-pending-input view pointer line)
+          (submit-input view pointer :record nil)
+          (when (plusp (length pending))
+            (replace-pending-input view pointer pending)))
+        (queue-push-string (listener-input listener) (format nil "~a~%" line))))
+  line)
+
+(defun choose-restart (index &optional value)
+  "Take restart INDEX, with VALUE -- the text of a form -- when there is one.
+Thread 1.
 
 See the header: this TYPES the number rather than invoking the restart, because
 the restart belongs to the listener thread and to the dynamic extent of the
-debugger that established it."
+debugger that established it.  With a value it types `1 42', which the debugger
+reads as the restart and its value in one line; see RESTART-SELECTION."
   (let ((listener *listener*))
     (when (and listener (>= index 0))
       (hide-restarts-panel listener)
-      (queue-push-string (listener-input listener) (format nil "~d~%" index))
+      (type-into-listener listener
+                          (if value
+                              ;; One line: the debugger reads lines.
+                              (format nil "~d ~a" index
+                                      (substitute #\Space #\Newline value))
+                              (format nil "~d" index)))
       t)))
 
 (defun restart-asks-p (restart)
@@ -96,16 +127,38 @@ internal is acceptable for this and would not be for anything the behaviour
 depends on."
   (and (restart-interactive-function restart) t))
 
-(defun restart-button-title (index restart)
-  (format nil "~d:   [~a]   ~a~@[~a~]"
-          index
-          (or (restart-name restart) "ANONYMOUS")
-          (handler-case (princ-to-string restart)
-            (error () "(unprintable restart)"))
-          (and (restart-asks-p restart) " …")))
+(defstruct (restart-row (:constructor %make-restart-row))
+  "One restart, as both doors show it: the transcript's numbered list and the
+panel's rows.  Printed on the listener thread; see RESTART-ROWS."
+  (index 0)
+  (name "ANONYMOUS")
+  (report "")
+  ;; It will stop and ask for a value: see RESTART-ASKS-P.
+  (asks-p nil)
+  ;; Established outside the listener, below its own top-level restart --
+  ;; SBCL's per-thread abort.  Taking it ends the listener.
+  (outside-p nil))
 
-(defun restart-titles (restarts)
-  "The button labels, computed HERE -- on the listener thread.
+(defun make-restart-row (index restart &optional toplevel-index)
+  (let* ((outside (and toplevel-index (> index toplevel-index)))
+         (name (princ-to-string (or (restart-name restart) "ANONYMOUS")))
+         (report (handler-case (princ-to-string restart)
+                   (error () "(unprintable restart)"))))
+    (%make-restart-row
+     :index index
+     :name name
+     ;; SBCL's reports as `abort thread (#<THREAD tid=64787 "lisp listener"
+     ;; RUNNING {8009820453}>)': unreadable, cut off in any row it is put in,
+     ;; and different on every run.  Beyond the listener's own restart there is
+     ;; only the thread, so say that.
+     :report (if (and outside (string-equal name "ABORT"))
+                 "Abort the listener thread"
+                 report)
+     :asks-p (restart-asks-p restart)
+     :outside-p outside)))
+
+(defun restart-rows (restarts &optional toplevel-index)
+  "RESTARTS as rows, computed HERE -- on the listener thread.
 
 A restart's report may read the CURRENT thread rather than the one it was
 established on.  SBCL's per-thread abort restart is exactly that: it reports as
@@ -116,10 +169,37 @@ printed on the listener thread, had it right all along.
 
 Measured: a restart established on one thread and printed from another reports
 the printing thread's name.  So the strings are made here and the panel is
-handed text it cannot get wrong."
+handed text it cannot get wrong.
+
+TOPLEVEL-INDEX is where the listener's own top-level restart sits; the rows
+after it are marked as outside the listener."
   (loop for restart in restarts
         for index from 0
-        collect (restart-button-title index restart)))
+        collect (make-restart-row index restart toplevel-index)))
+
+(defun restart-row-title (row)
+  "ROW as one line of text: `0: [CONTINUE] Retry using *FOO*.', with an
+ellipsis when it asks for a value."
+  (format nil "~d: [~a] ~a~@[ …~]"
+          (restart-row-index row) (restart-row-name row)
+          (restart-row-report row) (restart-row-asks-p row)))
+
+(defun restart-titles (restarts &optional toplevel-index)
+  "RESTARTS as one line of text each.  On the listener thread."
+  (mapcar #'restart-row-title (restart-rows restarts toplevel-index)))
+
+(defun activate-restart (index &optional (listener *listener*))
+  "Choose row INDEX -- double-clicked, Invoked, or its ⌘-number pressed.
+Thread 1.
+
+A restart that will ask for a value asks for it in the panel, where the front
+end has somewhere to put it; any other is taken at once."
+  (let* ((controller (and listener
+                          (getf (listener-retained listener) :restarts-controller)))
+         (row (and controller (nth index (controller-titles controller)))))
+    (cond ((null row) nil)
+          ((restart-row-asks-p row) (request-restart-value listener index) t)
+          (t (let ((*listener* listener)) (choose-restart index))))))
 
 (defun squeeze-whitespace (text)
   "TEXT with each run of whitespace reduced to one space, and trimmed.
@@ -138,17 +218,36 @@ one-line heading, that indentation would survive as ragged gaps."
                    (setf started t))))
     (get-output-stream-string out)))
 
-(defun condition-summary (condition)
-  "One line for the panel's heading.  The transcript has the full report; this
-only has to say which condition the buttons belong to.
+(defstruct (debugger-heading (:constructor make-debugger-heading
+                                 (type report level)))
+  "What the panel says above the restarts: the condition's type, its report,
+and the debugger level it opened.  Printed on the listener thread, for the same
+reason the rows are."
+  (type "")
+  (report "")
+  (level 1))
 
-Computed on the listener thread, for the same reason the titles are."
+(defparameter *heading-report-limit* 1000
+  "The most of a condition's report the panel shows.  The transcript has all of
+it; this only stops a report the size of a page from taking over the panel.")
+
+(defun condition-heading (condition level)
   (let ((squeezed (squeeze-whitespace (report-condition condition))))
-    (format nil "~a: ~a"
-            (type-of condition)
-            (if (> (length squeezed) 90)
-                (concatenate 'string (subseq squeezed 0 87) "...")
-                squeezed))))
+    (make-debugger-heading
+     (princ-to-string (type-of condition))
+     (if (> (length squeezed) *heading-report-limit*)
+         (concatenate 'string (subseq squeezed 0 (- *heading-report-limit* 3)) "...")
+         squeezed)
+     level)))
+
+(defun heading-line (heading)
+  "HEADING as one line: `UNBOUND-VARIABLE: The variable *FOO* is unbound.'"
+  (format nil "~a: ~a" (debugger-heading-type heading)
+          (debugger-heading-report heading)))
+
+(defun heading-title (heading)
+  "The panel's title, which says how deep the debugger is."
+  (format nil "Debugger — Level ~d" (debugger-heading-level heading)))
 
 (defun forget-restarts (listener)
   "Clear what a panel that is going away leaves behind.  Thread 1.
@@ -162,6 +261,7 @@ stale list would be answered to the next panel that asks."
     (let ((controller (getf (listener-retained listener) :restarts-controller)))
       (when controller
         (setf (controller-titles controller) '()
+              (controller-views controller) '()
               (controller-cancel-index controller) nil))))
   t)
 
@@ -189,7 +289,8 @@ offer.  Thread 1.  Returns whether it did."
 
 ;;; What the debugger calls ------------------------------------------------------
 
-(defun offer-restarts (listener condition restarts &optional backtrace cancel-index)
+(defun offer-restarts (listener condition restarts
+                       &optional backtrace cancel-index (level 1))
   "Show the restarts, from the listener thread.  Never blocks it.
 
 :WAIT NIL, so the listener thread goes straight on to its prompt: the panel and
@@ -198,10 +299,10 @@ shut the other one."
   (when (and *restarts-panel-enabled* *main-thread-target*)
     (ignore-errors
      ;; Printed HERE, on the listener thread, and handed over as text.
-     (let ((heading (condition-summary condition))
-           (titles (restart-titles restarts)))
+     (let ((heading (condition-heading condition level))
+           (rows (restart-rows restarts cancel-index)))
        (on-main-thread ()
-         (show-restarts-panel listener heading backtrace titles cancel-index)))))
+         (show-restarts-panel listener heading backtrace rows cancel-index)))))
   restarts)
 
 (defun withdraw-restarts (listener)

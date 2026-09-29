@@ -16,6 +16,19 @@
 
 (in-package #:lisp-listener)
 
+(defconstant +ns-window-style-utility+ 16
+  "NSWindowStyleMaskUtilityWindow; only meaningful for an NSPanel.")
+
+(defun position-history-panel (listener panel)
+  "Put the panel over the listener window, near its top left."
+  (handler-case
+      (let ((frame (objc:invoke (listener-window listener) "frame")))
+        (objc:invoke panel "setFrameTopLeftPoint:"
+                     (vector (+ (aref frame 0) 48d0)
+                             (- (+ (aref frame 1) (aref frame 3)) 48d0))))
+    (error () (objc:invoke panel "center")))
+  panel)
+
 (defparameter *history-panel-width* 620d0)
 (defparameter *history-panel-height* 400d0)
 (defparameter *history-panel-margin* 14d0)
@@ -194,7 +207,7 @@ MAKE-ROW-VIEW in src/macos/restarts-panel.lisp."
   (hide-history-popup listener)
   (let ((panel (build-history-panel listener)))
     (setf (listener-history-panel listener) panel)
-    (position-restarts-panel listener panel)
+    (position-history-panel listener panel)
     ;; Key, unlike the restarts panel: there is a search field to type into.
     (objc:invoke panel "makeKeyAndOrderFront:" nil)
     panel))

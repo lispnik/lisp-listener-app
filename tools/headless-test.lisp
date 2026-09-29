@@ -213,6 +213,21 @@ inherited that would be testing the case before it."
   (say listener "(* 6 7)")
   (check-text listener "42" "the value it read is the value of the form"))
 
+(defcase case-restart-with-value
+    "`1 42' at a debugger prompt: the restart and its value in one line."
+  (say listener (missing-variable-source "*missing-for-one-line*"))
+  (check-text listener "Restarts:" "an unbound variable enters the debugger")
+  (say listener "1 (* 6 7)")
+  (check-text listener "42" "USE-VALUE takes the value of the form after the number")
+  (check (not (search "Enter a form to be evaluated" (transcript-so-far listener)))
+         "and does not stop to ask for it")
+  (check (equal '(1 "(* 6 7)") (multiple-value-list (restart-selection "1 (* 6 7)" 3)))
+         "the line is read as the number and the text after it")
+  (check (equal '(2 nil) (multiple-value-list (restart-selection " 2 " 3)))
+         "a number alone has no value")
+  (check (null (restart-selection "1+" 3)) "a form that begins with a digit is a form")
+  (check (null (restart-selection "7 1" 3)) "and a number past the last restart is nothing"))
+
 (defcase case-store-value
     "STORE-VALUE: the other interactive restart on an unbound variable."
   (say listener (missing-variable-source "*another-missing-variable*"))
@@ -299,6 +314,95 @@ inherited that would be testing the case before it."
                   "and the debugger never reported failing"))
       (setf *log* nil))))
 
+(defvar cl-user::*never-bound*)
+(makunbound 'cl-user::*never-bound*)
+;; An UNBOUND VARIABLE, not a call to ERROR: SBCL reaches the debugger for one
+;; through its internal-error trap, which is the path that left its answer
+;; behind.  Two calls to ERROR pass with or without the fix.
+(defun cl-user::fail-first () (+ 1 cl-user::*never-bound*))
+(defun cl-user::fail-second () (error "second"))
+(declaim (notinline cl-user::fail-first cl-user::fail-second))
+
+(defun last-backtrace (listener)
+  "The frames of the most recent backtrace in LISTENER's transcript."
+  (let* ((text (transcript-so-far listener))
+         (start (search "Backtrace:" text :from-end t))
+         (end (and start (search "CL-USER>" text :start2 start))))
+    (and start (subseq text start end))))
+
+(defcase case-nested-backtrace
+    "A backtrace at level 2 is the second error's, not the first's."
+  ;; A regression test.  SBCL's debugger remembers where the stack it is showing
+  ;; starts, and the first level's answer was still bound while a form was
+  ;; evaluated at its prompt -- so every deeper level showed the FIRST error's
+  ;; frames, which were not even on the stack that failed.
+  (say listener "(cl-user::fail-first)")
+  (check-text listener "[1] CL-USER>" "the first error opens level 1")
+  (check (search "FAIL-FIRST" (or (last-backtrace listener) ""))
+         "and its backtrace names the function that failed")
+  (say listener "(cl-user::fail-second)")
+  (check-text listener "[2] CL-USER>" "the second opens level 2")
+  (let ((frames (or (last-backtrace listener) "")))
+    (check (search "FAIL-SECOND" frames)
+           "level 2's backtrace names the second function")
+    (check (not (search "FAIL-FIRST" frames))
+           "and does not start from the first error's frames")))
+
+(defun cl-user::fail-with-local (n)
+  (declare (optimize (debug 2)))
+  (let ((twice (* 2 n)))
+    (error "boom ~a" twice)))
+
+(defun captured-backtrace (thunk)
+  "The BACKTRACE-FRAMEs the debugger would capture for an error in THUNK."
+  (let* ((frames nil)
+         (hook (lambda (condition hook)
+                (declare (ignore condition hook))
+                (setf frames (capture-backtrace))
+                (throw 'captured nil))))
+    (catch 'captured
+      (let ((*debugger-hook* hook))
+        (with-invoke-debugger-hook (hook)
+          (funcall thunk))))
+    frames))
+
+(defcase case-backtrace-trim
+    "The backtrace shows the code that failed, not the evaluator under it."
+  (say listener "(cl-user::fail-first)")
+  (check-text listener "[1] CL-USER>" "an error in a function opens the debugger")
+  (let ((frames (or (last-backtrace listener) "")))
+    (check (search "FAIL-FIRST" frames) "its backtrace names the function")
+    (check (not (or (search "SIMPLE-EVAL" frames) (search "BYTECODES" frames)))
+           "and not the evaluator frames below it, which only say it was typed"))
+  (say listener "0")
+  (check-text listener "CL-USER>" "back at the top level")
+  (say listener (missing-variable-source "cl-user::*never-bound*"))
+  (check-text listener "[1] CL-USER>" "an unbound variable typed at the prompt")
+  (check (search " 0: " (or (last-backtrace listener) ""))
+         "still has a backtrace, though the evaluator is all there is")
+  #+sbcl
+  (let* ((frames (captured-backtrace (lambda () (cl-user::fail-with-local 21))))
+         (frame (find "FAIL-WITH-LOCAL" frames :key #'backtrace-frame-line :test #'search)))
+    (check frame "a captured frame is the function that failed")
+    ;; N, the argument.  TWICE is not there and is not expected: its only use
+    ;; is as ERROR's argument, and the compiler keeps no variable for it.
+    (check (and frame (member "N = 21" (backtrace-frame-locals frame) :test #'string=))
+           "and carries its locals, printed: ~s"
+           (and frame (backtrace-frame-locals frame)))))
+
+(defcase case-no-blank-line
+    "A value comes straight after the line typed, at any level."
+  ;; Here, unlike in the window, what is typed is not echoed: so the value of a
+  ;; form should follow the prompt on the same line, and a newline between them
+  ;; is the one FRESH-LINE adds when the stream thinks it is still after the
+  ;; prompt.  In the window that newline is a blank line above every value.
+  (say listener "(+ 1 2)")
+  (check-text listener (format nil "CL-USER> 3~%") "at the top level")
+  (say listener "(error \"stop\")")
+  (check-text listener "[1] CL-USER>" "an error opens level 1")
+  (say listener "(+ 20 22)")
+  (check-text listener (format nil "[1] CL-USER> 42~%") "and at a debugger prompt"))
+
 (defcase case-toplevel-restart-index
     "The toplevel restart is NOT index 0 -- Cancel must find it by object."
   ;; A regression test for a decision, not for a line.  On an unbound variable
@@ -358,6 +462,42 @@ exactly that."
            "USE-VALUE's label ends in an ellipsis")
     (check (and plain (not (search "…" plain)))
            "a restart that does not ask carries none")))
+
+(defun case-restart-rows ()
+  "What the panel and the transcript are handed: rows, and the heading."
+  (format t "~&~%Restart rows: the listener's own, and the thread's beyond it.~%")
+  (finish-output)
+  (let ((rows nil))
+    (restart-case
+        (restart-case
+            (let* ((restarts (compute-restarts))
+                   (top (position 'toplevel restarts :key #'restart-name)))
+              (setf rows (restart-rows restarts top)))
+          (toplevel () :report "Return to the listener's top level."))
+      (abort () :report "abort thread (#<THREAD tid=1 \"lisp listener\" RUNNING {1}>)"))
+    (let ((top (find "TOPLEVEL" rows :key #'restart-row-name :test #'string=))
+          (thread (find-if (lambda (row)
+                             (and (string= "ABORT" (restart-row-name row))
+                                  (restart-row-outside-p row)))
+                           rows)))
+      (check (and top (not (restart-row-outside-p top)))
+             "the listener's own top-level restart is inside")
+      (check (and thread (string= "Abort the listener thread" (restart-row-report thread)))
+             "an ABORT beyond it is the thread's, and says so rather than printing it")
+      (check (and thread (string= (restart-row-title thread)
+                                  (format nil "~d: [ABORT] Abort the listener thread"
+                                          (restart-row-index thread))))
+             "and its one-line title is the same words")))
+  (let ((heading (condition-heading
+                  (make-condition 'simple-error
+                                  :format-control "The value~%  7~%is not of type~%  LIST")
+                  2)))
+    (check (string= "SIMPLE-ERROR" (debugger-heading-type heading))
+           "the heading names the condition's type")
+    (check (string= "The value 7 is not of type LIST" (debugger-heading-report heading))
+           "and its report, on one line to be wrapped by the panel")
+    (check (string= "Debugger — Level 2" (heading-title heading))
+           "and the title says how deep the debugger is")))
 
 (defun case-two-listeners ()
   "Two at once: the registry, and one transcript per listener.
@@ -774,10 +914,12 @@ bound away from the front end's own -- a test has no business writing into
 
 ;;; ----------------------------------------------------------------------------
 
-(dolist (case '(case-session case-debugger case-use-value case-store-value
+(dolist (case '(case-session case-debugger case-use-value case-restart-with-value
+                case-store-value
                 case-y-or-n-p case-abort case-interrupt case-nested-debugger
+                case-nested-backtrace case-no-blank-line case-backtrace-trim
                 case-toplevel-restart-index
-                case-interactive-restarts-are-marked
+                case-interactive-restarts-are-marked case-restart-rows
                 case-two-listeners case-nil-is-nobody case-history case-completion
                 case-sexp case-paredit case-indent case-keymap case-init-file
                 case-history-search

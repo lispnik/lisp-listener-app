@@ -249,6 +249,46 @@ A step whose predicate has not held within its time fails."
          (lambda () (and (at-top-level-prompt-p listener)
                          (not (restarts-panel-visible-p listener))))
          nil)
+   ;; A restart that asks for a value asks in the sheet.  RESTART-CASE rather
+   ;; than an unbound variable: ECL establishes no USE-VALUE around one.
+   (list "a restart that asks is offered" (constantly t)
+         (lambda ()
+           (type-line listener
+                      "(restart-case (error \"ask me\") (use-value (v) :report \"Use a value.\" :interactive (lambda () (list (eval (read)))) v))")))
+   (list "choosing it opens the value field"
+         (lambda () (restarts-panel-visible-p listener))
+         (lambda ()
+           (activate-restart 0 listener)
+           (let* ((views (controller-views
+                          (getf (listener-retained listener) :restarts-controller)))
+                  (field (getf views :value-field)))
+             (unless (eql 0 (getf views :value-index))
+               (error "no question is being asked"))
+             (when (objc:invoke-bool field "isHidden")
+               (error "the field is hidden"))
+             (objc:invoke field "setText:" "(* 6 7)"))))
+   (list :hold nil nil)
+   (list "the value is sent" (constantly t)
+         (lambda ()
+           (unless (submit-restart-value listener)
+             (error "nothing was sent"))))
+   (list "USE-VALUE with (* 6 7) returned 42"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (not (restarts-panel-visible-p listener))
+                         (search (format nil "0 (* 6 7)~%42~%") (self-test-text listener))))
+         nil)
+   ;; ⌘0, through the key command's own IMP, as a keyboard would send it.
+   (list "another error" (constantly t)
+         (lambda () (type-line listener "(error \"again\")")))
+   (list "⌘0 takes the top-level restart"
+         (lambda () (restarts-panel-visible-p listener))
+         (lambda ()
+           (objc:invoke (listener-view listener) "listenerRestartKey:"
+                        (key-command "0" "listenerRestartKey:" +ui-key-modifier-command+))))
+   (list "and the top level is back"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (not (restarts-panel-visible-p listener))))
+         nil)
    (list :hold nil nil)))
 
 (defun start-self-test (listener hold)

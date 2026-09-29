@@ -126,22 +126,54 @@ backtrace.  Found by a test whose own label string contained the name, which
 made the trim appear to work for entirely the wrong reason."
   (and (consp frame)
        (symbolp (first frame))
-       (eq (first frame) 'listener-rep)))
+       ;; LISTENER-DEBUGGER too: at a second level, what lies beneath the
+       ;; level-1 debugger is the FIRST error, which has a backtrace of its own.
+       (member (first frame) '(listener-rep listener-debugger))))
 
 (defun trim-listener-frames (frames count)
-  "Cut FRAMES where the listener's own machinery begins, and cap the rest.
+  "Cut FRAMES, each (CALL . LOCALS), to the ones worth reading, and cap them.
 
-Everything below LISTENER-REP is this program evaluating your form -- EVAL, the
-read loop, the thread function -- and it is the same frames every time, on
-every error."
-  (let ((end (or (position-if #'listener-frame-p frames) (length frames))))
-    (subseq frames 0 (min end count))))
+Everything below LISTENER-REP is this program evaluating your form -- the read
+loop, the thread function -- and it is the same frames every time, on every
+error.  Then the run of the implementation's own evaluator that is left at the
+bottom -- SIMPLE-EVAL-IN-LEXENV, EVAL, ECL's BYTECODES -- goes too, WHEN
+anything is left above it: after (FAIL) the evaluator frames only say that
+(FAIL) was typed.  When there is nothing else, they are the backtrace -- an
+unbound variable in a form typed at the prompt fails in the evaluator itself --
+and they stay."
+  (let* ((end (or (position-if #'listener-frame-p frames :key #'car) (length frames)))
+         (mine (subseq frames 0 end))
+         (last-own (position-if-not #'internal-frame-p mine :key #'car :from-end t)))
+    (when last-own
+      (setf mine (subseq mine 0 (1+ last-own))))
+    (subseq mine 0 (min (length mine) count))))
+
+(defstruct (backtrace-frame (:constructor make-backtrace-frame (line locals)))
+  "One frame, printed: `0: (FOO 1 2)', and its locals as `N = 1' lines.
+Printed on the listener thread, while the stack is there to print."
+  (line "")
+  (locals '()))
+
+(defun local-line (local)
+  "One local variable, (SYMBOL . VALUE), as `N = 1'."
+  (let ((*print-pretty* nil)
+        (*print-level* 3)
+        (*print-length* 8)
+        (*print-circle* t)
+        (*print-readably* nil))
+    ;; The variable by its NAME: it is local to a function whose package is
+    ;; not in question, and `LISP-LISTENER::N' says nothing `N' does not.
+    (format nil "~a = ~a"
+            (handler-case (string (car local)) (error () "?"))
+            (handler-case (prin1-to-string (cdr local))
+              (error () "(unprintable)")))))
 
 (defun capture-backtrace (&optional (count *backtrace-frames*))
-  "The frames beneath the error, as numbered strings.
+  "The frames beneath the error, as BACKTRACE-FRAMEs.
 
 CAPTURED HERE, inside the hook, because here is the only place the stack still
-exists: by the time a restart has been chosen it has been unwound.
+exists: by the time a restart has been chosen it has been unwound -- and the
+same goes for every local variable in it.
 
 BACKTRACE-FRAMES starts at the frame that signalled and skips INVOKE-DEBUGGER,
 the hooks and this function, which are ours and are never what anyone wants to
@@ -152,21 +184,25 @@ drop some."
       ;; function a frame is, which only the frame itself can answer.
       (let* ((raw (backtrace-frames (+ count 8)))
              (frames (trim-listener-frames raw count)))
-        (loop for frame in frames
+        (loop for (call . locals) in frames
               for index from 0
-              collect (format nil "~2d: ~a" index (frame-line frame))))
+              collect (make-backtrace-frame
+                       (format nil "~2d: ~a" index (frame-line call))
+                       (mapcar #'local-line locals))))
     (error (condition)
-      (list (format nil "(the backtrace could not be taken: ~a)" condition)))))
+      (list (make-backtrace-frame
+             (format nil "(the backtrace could not be taken: ~a)" condition)
+             '())))))
 
-(defun print-backtrace-lines (listener lines)
-  (when lines
+(defun print-backtrace-lines (listener frames)
+  (when frames
     (let ((stream (listener-output listener)))
       (with-output-kind (stream :note)
         (format stream "~&Backtrace:~%")
-        (dolist (line lines)
-          (format stream "  ~a~%" line))))))
+        (dolist (frame frames)
+          (format stream "  ~a~%" (backtrace-frame-line frame)))))))
 
-(defun print-restarts (listener restarts)
+(defun print-restarts (listener restarts &optional toplevel-index)
   "The numbered list in the transcript.
 
 The ellipsis marks the restarts that will stop and ask for a value, the same
@@ -176,14 +212,10 @@ buttons would make typing 3 and clicking row 3 look like different acts."
   (let ((stream (listener-output listener)))
     (with-output-kind (stream :error)
       (format stream "~&Restarts:~%")
-      (loop for restart in restarts
-            for index from 0
-            do (format stream "  ~2d: [~a] ~a~@[~a~]~%"
-                       index
-                       (or (restart-name restart) "ANONYMOUS")
-                       (handler-case (princ-to-string restart)
-                         (error () "(unprintable restart)"))
-                       (and (restart-asks-p restart) " …"))))))
+      (dolist (row (restart-rows restarts toplevel-index))
+        (format stream "  ~2d: [~a] ~a~@[ …~]~%"
+                (restart-row-index row) (restart-row-name row)
+                (restart-row-report row) (restart-row-asks-p row))))))
 
 (defun drain-pending-whitespace (stream)
   "Consume whitespace already buffered on STREAM, without ever blocking.
@@ -214,14 +246,14 @@ transfers control through a restart or aborts to the top level."
     (with-output-kind (stream :error)
       (format stream "~&~%~a~%  [Condition of type ~a]~%"
               (report-condition condition) (type-of condition)))
-    (print-restarts listener restarts)
+    (print-restarts listener restarts (position *toplevel-restart* restarts))
     (let ((backtrace (and *backtrace-enabled* (capture-backtrace))))
       (print-backtrace-lines listener backtrace)
       ;; The panel is an ADDITION: the numbered list above is still printed and
       ;; the prompt below still takes a number.  Clicking a button types that
       ;; number, so both doors lead to the same READ-LINE.
       (offer-restarts listener condition restarts backtrace
-                      (position *toplevel-restart* restarts)))
+                      (position *toplevel-restart* restarts) (1+ saved)))
     (drain-pending-whitespace *standard-input*)
     (setf (listener-debug-level listener) (1+ saved))
     ;; Both hooks, again, for the levels below this one; see
@@ -238,10 +270,16 @@ transfers control through a restart or aborts to the top level."
              (emit-prompt listener)
              (let ((line (read-line *standard-input* nil nil)))
                (setf (listener-prompt listener) nil)
+               ;; As in LISTENER-REP: the view already put the newline on
+               ;; screen, but the stream last wrote the prompt, so FRESH-LINE
+               ;; would add a second one -- a blank line above everything
+               ;; printed at a debugger prompt.
+               (setf (stream-column (listener-output listener)) 0)
                ;; End of input: the window has gone and nothing can ever be read
                ;; again.  Leave, and let the abort below unwind to the top level.
                (when (null line) (return))
-               (let ((selection (restart-selection line (length restarts))))
+               (multiple-value-bind (selection value)
+                   (restart-selection line (length restarts))
                  ;; An error in what is evaluated HERE opens the next level down,
                  ;; exactly as one at the top level opens this one.  It has to be
                  ;; sent there by hand: this whole function runs inside the
@@ -253,8 +291,11 @@ transfers control through a restart or aborts to the top level."
                  ;; innermost, so the evaluated code's own handlers still come
                  ;; first, and around TAKE-RESTART too, whose interactive function
                  ;; reads and evaluates a form of its own.
-                 (handler-bind ((error #'invoke-debugger))
+                 (with-fresh-stack-top ()
+                  (handler-bind ((error #'invoke-debugger))
                    (cond
+                     ((and selection value)
+                      (take-restart-with-value (nth selection restarts) value))
                      (selection (take-restart (nth selection restarts)))
                      (t
                       ;; READ-FROM-STRING on a blank line signals END-OF-FILE, which
@@ -266,7 +307,7 @@ transfers control through a restart or aborts to the top level."
                         (declare (ignore position))
                         (unless (eq form +eof+)
                           (print-values listener
-                                        (multiple-value-list (eval form)))))))))))
+                                        (multiple-value-list (eval form))))))))))))
         (setf (listener-debug-level listener) saved)
         (withdraw-restarts listener))))
     ;; THIS MUST NOT RETURN; see the docstring.  Reached only on end of input.
@@ -276,14 +317,24 @@ transfers control through a restart or aborts to the top level."
 (defun restart-selection (line count)
   "The restart LINE names, or NIL when it is a form to evaluate instead.
 
+`3' names restart 3.  `1 42' names restart 1 AND gives it a value: the second
+value is the text after the number, `42', to be read, evaluated and handed to
+the restart -- which is how USE-VALUE and STORE-VALUE are answered in one line,
+and what the panel types when its value field is used.  A line that begins
+with a number but goes on without a space, `1+', is a form like any other.
+
 READ-LINE rather than READ, so that a restart which goes on to read a value of
 its own starts from a clean line rather than from the rest of ours."
-  (let ((trimmed (string-trim '(#\Space #\Tab #\Return) line)))
+  (let* ((whitespace '(#\Space #\Tab #\Return))
+         (trimmed (string-trim whitespace line))
+         (end (position-if-not #'digit-char-p trimmed)))
     (when (and (plusp (length trimmed))
-               (every #'digit-char-p trimmed))
-      (let ((index (parse-integer trimmed :junk-allowed t)))
-        (when (and index (< -1 index count))
-          index)))))
+               (or (null end)
+                   (and (plusp end) (member (char trimmed end) whitespace))))
+      (let ((index (parse-integer trimmed :end end)))
+        (when (< -1 index count)
+          (values index
+                  (and end (string-trim whitespace (subseq trimmed end)))))))))
 
 (defun take-restart (restart)
   "Invoke RESTART, asking for whatever it needs.
@@ -293,6 +344,16 @@ with an interactive function: a restart that has none is simply called with no
 arguments.  It converses on *QUERY-IO*, which this thread has bound to the
 window, so STORE-VALUE and USE-VALUE ask there rather than nowhere."
   (invoke-restart-interactively restart))
+
+(defun take-restart-with-value (restart text)
+  "Invoke RESTART with the value of the form TEXT, without its asking.
+
+For `1 42' at a debugger prompt.  A TEXT that holds no form at all -- a
+comment, say -- is the same as naming the restart alone."
+  (let ((form (read-from-string text nil +eof+)))
+    (if (eq form +eof+)
+        (take-restart restart)
+        (invoke-restart restart (eval form)))))
 
 ;;; The loop ------------------------------------------------------------------
 
@@ -335,16 +396,25 @@ Errors go to the debugger hook, not to here."
          (print-values listener values))
        t))))
 
+(defun listener-debugger-hook (condition hook)
+  "The debugger hook, for every level.
+
+A named function rather than a closure over the listener, and that is for
+ECL: its frame stack holds a closure's CODE, not the closure, so an anonymous
+hook could be found neither by name nor by identity, and BACKTRACE-FRAMES cuts
+ECL's frames here.  *LISTENER* is this thread's listener; START-LISTENER-THREAD
+binds it around LISTENER-LOOP."
+  (declare (ignore hook))
+  (handler-case (listener-debugger *listener* condition)
+    (error (inner)
+      (note "the debugger itself failed: ~a" inner)
+      (abort))))
+
 (defun listener-loop (listener)
   (let* ((input (listener-input-stream-for listener))
          (output (listener-output listener))
          (io (make-two-way-stream input output))
-         (debugger (lambda (condition hook)
-                     (declare (ignore hook))
-                     (handler-case (listener-debugger listener condition)
-                       (error (inner)
-                         (note "the debugger itself failed: ~a" inner)
-                         (abort))))))
+         (debugger #'listener-debugger-hook))
     (let ((*standard-input* input)
           (*standard-output* output)
           (*error-output* output)

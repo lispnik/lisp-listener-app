@@ -171,9 +171,8 @@ say the window was blank."
 (defun shoot-debugger (listener directory)
   "An error, its restarts in the transcript, and the restarts panel.
 
-Returns an alist of the two shots, because this scene makes two: the
-transcript and the panel are separate windows, and there is no screen capture
-available here to get both in one frame.
+Returns an alist of the two shots: the transcript as the debugger opens, and
+the same window once the restarts pane is docked under it.
 
 An UNBOUND VARIABLE rather than (ERROR \"...\") or (CAR 7).  A system condition
 carries a real report and a real restart list, which is what the pictures are
@@ -188,16 +187,34 @@ way round -- the panel gets exercised end to end, through the button's target
 and tag and the number it queues, rather than merely photographed.  If the
 click does not get us back to the top level, the panel is broken and this says
 so instead of quietly aborting and looking fine."
-  (let* ((entered (and (submit-and-wait listener "(symbol-value '*no-such-variable*)"
-                                         "Restarts:")
+  (let* (;; The transcript's picture WITHOUT the pane.  The pane is docked in
+         ;; this same window and arrives a hop after the transcript shows the
+         ;; debugger, so a picture taken in between had it or not by chance --
+         ;; and a picture that differs by chance cannot be compared with the
+         ;; committed one.  So this error is made with the pane off, and left
+         ;; by (ABORT) at the prompt; the next one brings the pane.
+         ;; SETF, not LET: the listener thread decides whether to offer the
+         ;; pane, and a binding made here would not be seen there.
+         (transcript
+           (unwind-protect
+                (progn
+                  (setf *restarts-panel-enabled* nil)
+                  (and (submit-and-wait listener "(symbol-value '*no-such-variable*)"
+                                        "Restarts:")
+                       (wait-for (lambda () (in-debugger-p listener)) :timeout 5)
+                       (prog1 (capture (listener-window listener) directory "debugger.png")
+                         (submit-and-wait listener "(abort)" "Aborted.")
+                         (wait-for (lambda () (waiting-at-top-level-p listener))
+                                   :timeout 5))))
+             (setf *restarts-panel-enabled* t)))
+         (entered (and (submit-and-wait listener "(symbol-value '*no-such-variable*)"
+                                        "Restarts:")
                        (wait-for (lambda () (in-debugger-p listener)) :timeout 5)))
-         (transcript (and entered
-                          (capture (listener-window listener) directory "debugger.png")))
          (panel-up (and entered
                         (wait-for (lambda () (restarts-panel-visible-p listener))
                                   :timeout 5)))
          (panel (and panel-up
-                     (capture (listener-restarts-panel listener) directory
+                     (capture (listener-window listener) directory
                               "restarts.png"))))
     (unless panel-up
       (note "screenshots: the restarts panel never appeared"))

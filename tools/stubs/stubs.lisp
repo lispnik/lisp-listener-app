@@ -39,7 +39,7 @@
   (:export #:ensure-objc-initialized
            #:invoke #:invoke-bool #:invoke-into #:invoke* #:current-super
            #:alloc-init-object #:description
-           #:coerce-to-objc-class #:objc-class-name #:coerce-to-selector
+           #:coerce-to-objc-class #:objc-class-name #:coerce-to-selector #:selector-name
            #:objc-object-pointer #:objc-class #:sel #:objc-c-string #:objc-bool
            #:retain #:release #:autorelease #:retain-count #:with-autorelease-pool
            #:ns-string-to-string #:string-to-ns-string
@@ -152,6 +152,7 @@
 (defun coerce-to-objc-class (class) (declare (ignore class)) nil)
 (defun objc-class-name (class) (declare (ignore class)) "")
 (defun coerce-to-selector (method) (declare (ignore method)) nil)
+(defun selector-name (selector) (declare (ignore selector)) "")
 (defgeneric objc-object-pointer (object))
 (defmethod objc-object-pointer ((object t)) object)
 (defun retain (pointer) pointer)
