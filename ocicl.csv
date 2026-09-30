@@ -17,8 +17,8 @@ float-features, ghcr.io/ocicl/float-features@sha256:8c6019d2c33036229a3a6c81185c
 global-vars, ghcr.io/ocicl/global-vars@sha256:d197e871c9c9abc4bf31b1186f5fd28f0ca848ebe2e9dddf2d82ecee01dbdc65, global-vars-20240503-c749f32/global-vars.asd
 global-vars-test, ghcr.io/ocicl/global-vars@sha256:d197e871c9c9abc4bf31b1186f5fd28f0ca848ebe2e9dddf2d82ecee01dbdc65, global-vars-20240503-c749f32/global-vars-test.asd
 multilang-documentation-utils, ghcr.io/ocicl/documentation-utils@sha256:b2a1b3f3bcd1a738af85ae2b0168d408c177661eab6d6bbebb254e394d983f54, documentation-utils-20230511-98630dd/multilang-documentation-utils.asd
-notes-app, ghcr.io/ocicl/objc@sha256:3a99872fdc89eff4599f021b02d704ca0367af7e4eda229df278a28696e41235, objc-20260918-a217b78/examples/notes-app/notes-app.asd
-objc, ghcr.io/ocicl/objc@sha256:3a99872fdc89eff4599f021b02d704ca0367af7e4eda229df278a28696e41235, objc-20260918-a217b78/objc.asd
+notes-app, ghcr.io/ocicl/objc@sha256:2c8863ab61642b1defdbb8d1dea957f53e1239ffc8a2f7ec468aa7a1b922c76f, objc-20260930-eefd435/examples/notes-app/notes-app.asd
+objc, ghcr.io/ocicl/objc@sha256:2c8863ab61642b1defdbb8d1dea957f53e1239ffc8a2f7ec468aa7a1b922c76f, objc-20260930-eefd435/objc.asd
 trivial-features, ghcr.io/ocicl/trivial-features@sha256:ab71fa7a6cbef84578616795f3af8ebb09d3bce1e6b89da3fc80db19236cc5b4, trivial-features-20260908-828246a/trivial-features.asd
 trivial-features-tests, ghcr.io/ocicl/trivial-features@sha256:ab71fa7a6cbef84578616795f3af8ebb09d3bce1e6b89da3fc80db19236cc5b4, trivial-features-20260908-828246a/trivial-features-tests.asd
 trivial-garbage, ghcr.io/ocicl/trivial-garbage@sha256:e76c38568f7ff0a2564ab47e27e0b2293f00f258e6510f2abec4d46920f2c4db, trivial-garbage-20260829-f0663f7/trivial-garbage.asd
