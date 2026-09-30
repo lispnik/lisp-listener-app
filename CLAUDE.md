@@ -35,6 +35,7 @@ make demo           # => build/demo/lisp-listener-demo.mp4 (needs ffmpeg, ImageM
 make ios-toolchain  # once: asdf-ios-app builds the host and iOS ECLs (~10 min)
 make ios            # => build/iphonesimulator/Lisp Listener.app
 make run-ios        # build, install and launch in the booted simulator
+make ios-demo       # => build/ios-demo/lisp-listener-ios-demo.mp4, from the self-test
 ```
 
 The iOS targets run under **ECL**, not SBCL: asdf-ios-app is ECL code and
@@ -277,7 +278,12 @@ for anyone who only wants to load the library.
 `check.yml` runs the three checks on Linux in seconds. `macos.yml` builds SBCL
 `--with-sb-safepoint` (cached, pinned to a tag), verifies the build really has
 them, runs the self-test, builds and runs the bundle, proves the ocicl-only path,
-and takes the screenshots — on **arm64 and Intel**. The Intel leg is not
+and takes the screenshots — on **arm64 and Intel**. On a `v*` tag each leg also
+zips the app it built and ran (`ditto`, which keeps the signature) and attaches
+it to that tag's release; the app is signed ad hoc, and the release notes say
+how to get past Gatekeeper. On Run workflow (`workflow_dispatch`) the arm64 leg
+also makes the demo video, last, with Homebrew's `ffmpeg-full` -- the plain
+`ffmpeg` formula has no libass and so no captions. The Intel leg is not
 box-ticking: a struct over sixteen bytes returns through `objc_msgSend_stret` on
 x86-64 and through `x8` on arm64, and every `NSRange` and `NSRect` here crosses
 that boundary.
