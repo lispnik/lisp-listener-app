@@ -138,14 +138,14 @@ loop, the thread function -- and it is the same frames every time, on every
 error.  Then the run of the implementation's own evaluator that is left at the
 bottom -- SIMPLE-EVAL-IN-LEXENV, EVAL, ECL's BYTECODES -- goes too, WHEN
 anything is left above it: after (FAIL) the evaluator frames only say that
-(FAIL) was typed.  When there is nothing else, they are the backtrace -- an
-unbound variable in a form typed at the prompt fails in the evaluator itself --
-and they stay."
+(FAIL) was typed.  When there is nothing else -- an unbound variable in a form
+typed at the prompt fails in the evaluator itself -- the innermost of them
+stays, which names what failed; the others were the same form again, once per
+level of the evaluator, and three of them said less than one."
   (let* ((end (or (position-if #'listener-frame-p frames :key #'car) (length frames)))
          (mine (subseq frames 0 end))
          (last-own (position-if-not #'internal-frame-p mine :key #'car :from-end t)))
-    (when last-own
-      (setf mine (subseq mine 0 (1+ last-own))))
+    (setf mine (subseq mine 0 (min (length mine) (if last-own (1+ last-own) 1))))
     (subseq mine 0 (min (length mine) count))))
 
 (defstruct (backtrace-frame (:constructor make-backtrace-frame (line locals)))
@@ -153,6 +153,16 @@ and they stay."
 Printed on the listener thread, while the stack is there to print."
   (line "")
   (locals '()))
+
+(defparameter *local-value-length* 400
+  "The most of a local's printed value kept.  *PRINT-LENGTH* and *PRINT-LEVEL*
+bound a list, but not a string or a long symbol, and a megabyte of string is a
+megabyte whichever way it is printed.")
+
+(defun cap-length (string limit)
+  (if (> (length string) limit)
+      (concatenate 'string (subseq string 0 (1- limit)) "…")
+      string))
 
 (defun local-line (local)
   "One local variable, (SYMBOL . VALUE), as `N = 1'."
@@ -165,8 +175,9 @@ Printed on the listener thread, while the stack is there to print."
     ;; not in question, and `LISP-LISTENER::N' says nothing `N' does not.
     (format nil "~a = ~a"
             (handler-case (string (car local)) (error () "?"))
-            (handler-case (prin1-to-string (cdr local))
-              (error () "(unprintable)")))))
+            (cap-length (handler-case (prin1-to-string (cdr local))
+                          (error () "(unprintable)"))
+                        *local-value-length*))))
 
 (defun capture-backtrace (&optional (count *backtrace-frames*))
   "The frames beneath the error, as BACKTRACE-FRAMEs.
@@ -246,9 +257,18 @@ transfers control through a restart or aborts to the top level."
     (with-output-kind (stream :error)
       (format stream "~&~%~a~%  [Condition of type ~a]~%"
               (report-condition condition) (type-of condition)))
-    (print-restarts listener restarts (position *toplevel-restart* restarts))
+    (if (restarts-pane-offered-p)
+        ;; The pane below has the list and the frames; the transcript keeps
+        ;; the condition and a line of what each number means, which is what
+        ;; still makes sense of `[1] CL-USER> 3' once the pane has gone.
+        (with-output-kind ((listener-output listener) :error)
+          (format (listener-output listener) "~&~a~%"
+                  (brief-restarts-line
+                   (restart-rows restarts (position *toplevel-restart* restarts)))))
+        (print-restarts listener restarts (position *toplevel-restart* restarts)))
     (let ((backtrace (and *backtrace-enabled* (capture-backtrace))))
-      (print-backtrace-lines listener backtrace)
+      (unless (restarts-pane-offered-p)
+        (print-backtrace-lines listener backtrace))
       ;; The panel is an ADDITION: the numbered list above is still printed and
       ;; the prompt below still takes a number.  Clicking a button types that
       ;; number, so both doors lead to the same READ-LINE.

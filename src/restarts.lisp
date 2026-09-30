@@ -289,6 +289,22 @@ offer.  Thread 1.  Returns whether it did."
 
 ;;; What the debugger calls ------------------------------------------------------
 
+(defun restarts-pane-offered-p ()
+  "Whether entering the debugger now puts the restarts on screen.  When it does,
+the transcript prints them in brief: the pane is right there."
+  (and *restarts-panel-enabled* *main-thread-target* t))
+
+(defun brief-restarts-line (rows)
+  "The restarts as one line: `Restarts: 0 CONTINUE · 1 USE-VALUE … · 3 ABORT'.
+The number and the name of each, since the number is what gets typed and the
+name is what it did; the thread's own abort is told apart from the listener's."
+  (format nil "Restarts: ~{~a~^ · ~}"
+          (mapcar (lambda (row)
+                    (format nil "~d ~a~:[~; (thread)~]~:[~; …~]"
+                            (restart-row-index row) (restart-row-name row)
+                            (restart-row-outside-p row) (restart-row-asks-p row)))
+                  rows)))
+
 (defun offer-restarts (listener condition restarts
                        &optional backtrace cancel-index (level 1))
   "Show the restarts, from the listener thread.  Never blocks it.
@@ -296,7 +312,7 @@ offer.  Thread 1.  Returns whether it did."
 :WAIT NIL, so the listener thread goes straight on to its prompt: the panel and
 the prompt are two doors into the same room, and waiting for the panel would
 shut the other one."
-  (when (and *restarts-panel-enabled* *main-thread-target*)
+  (when (restarts-pane-offered-p)
     (ignore-errors
      ;; Printed HERE, on the listener thread, and handed over as text.
      (let ((heading (condition-heading condition level))

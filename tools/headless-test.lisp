@@ -380,10 +380,18 @@ inherited that would be testing the case before it."
   (check-text listener "[1] CL-USER>" "an unbound variable typed at the prompt")
   (check (search " 0: " (or (last-backtrace listener) ""))
          "still has a backtrace, though the evaluator is all there is")
+  ;; But one frame of it: the innermost, which names what failed.  The rest
+  ;; was the same form over again, once per level of the evaluator.
+  #+sbcl
+  (check (not (search " 1: " (or (last-backtrace listener) "")))
+         "of one frame, the innermost: ~s" (last-backtrace listener))
   #+sbcl
   (let* ((frames (captured-backtrace (lambda () (cl-user::fail-with-local 21))))
          (frame (find "FAIL-WITH-LOCAL" frames :key #'backtrace-frame-line :test #'search)))
     (check frame "a captured frame is the function that failed")
+    (check (= (+ (length "BIG = ") *local-value-length*)
+              (length (local-line (cons 'big (make-string 5000 :initial-element #\x)))))
+           "a long value is cut short, not printed whole")
     ;; N, the argument.  TWICE is not there and is not expected: its only use
     ;; is as ERROR's argument, and the compiler keeps no variable for it.
     (check (and frame (member "N = 21" (backtrace-frame-locals frame) :test #'string=))
@@ -488,6 +496,17 @@ exactly that."
                                   (format nil "~d: [ABORT] Abort the listener thread"
                                           (restart-row-index thread))))
              "and its one-line title is the same words")))
+  ;; What the transcript says when the pane has the list.
+  (let ((rows (list (%make-restart-row :index 0 :name "CONTINUE")
+                    (%make-restart-row :index 1 :name "USE-VALUE" :asks-p t)
+                    (%make-restart-row :index 2 :name "ABORT")
+                    (%make-restart-row :index 3 :name "ABORT" :outside-p t))))
+    (check (string= "Restarts: 0 CONTINUE · 1 USE-VALUE … · 2 ABORT · 3 ABORT (thread)"
+                    (brief-restarts-line rows))
+           "in brief, the restarts are a line of numbers and names: ~s"
+           (brief-restarts-line rows)))
+  (check (not (restarts-pane-offered-p))
+         "and here, with no window to put a pane in, the transcript has them in full")
   (let ((heading (condition-heading
                   (make-condition 'simple-error
                                   :format-control "The value~%  7~%is not of type~%  LIST")
@@ -706,6 +725,14 @@ its lambda list."
   (check-edit 'insert-pair "(list |" "(list (|)" "( inserts a pair")
   (check-edit 'insert-pair "(list \"a|\"" :declined "( inside a string is just a paren")
   (check-edit 'insert-quote "(list |" "(list \"|\"" "\" inserts a pair")
+  ;; A regression test: the closing quote was typed as a second, literal one,
+  ;; so every string typed at the listener came out as "hi"" and the parens
+  ;; after it stopped lining up.
+  (check-edit 'insert-quote "(list \"hi|\")" "(list \"hi\"|)"
+              "\" before the closing quote steps over it, as ) does")
+  (check-edit 'insert-quote "(list \"|\")" "(list \"\"|)" "and so from an empty string")
+  (check-edit 'insert-quote "(list \"a|b\")" :declined
+              "in the middle of a string it is just a character")
   (check-edit 'close-or-skip "(list (a|)" "(list (a)|" ") steps over the close paren")
   (check-edit 'close-or-skip "(list (a|" :declined
               ") with nothing to step over declines, so the paren is typed")

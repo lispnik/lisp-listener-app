@@ -41,9 +41,39 @@
     ((self restarts-controller)
      (table objc:objc-object-pointer)
      (section (:signed :long-long)))
-  (declare (ignorable table section))
-  (handler-case (length (controller-titles self))
+  (declare (ignorable table))
+  (handler-case (if (zerop section)
+                    (length (controller-titles self))
+                    (length (getf (controller-views self) :frames)))
     (error (condition) (note "numberOfRowsInSection: ~a" condition) 0)))
+
+;;; Two sections: the restarts, which are what the sheet is for, and under them
+;;; the frames -- the other half of what a debugger shows, and all the
+;;; transcript no longer prints while the sheet is up.  ECL keeps only the
+;;; function of each frame, so that is all there is to show.
+(objc:define-objc-method ("numberOfSectionsInTableView:" (:signed :long-long))
+    ((self restarts-controller) (table objc:objc-object-pointer))
+  (declare (ignorable table))
+  (handler-case (if (getf (controller-views self) :frames) 2 1)
+    (error (condition) (note "numberOfSectionsInTableView: ~a" condition) 1)))
+
+(objc:define-objc-method ("tableView:titleForHeaderInSection:" objc:objc-object-pointer)
+    ((self restarts-controller) (table objc:objc-object-pointer)
+     (section (:signed :long-long)))
+  (declare (ignorable table))
+  ;; Autoreleased: the caller does not own what a Lisp method returns.
+  (handler-case (objc:autorelease
+                 (objc:invoke (objc:invoke "NSString" "alloc") "initWithString:"
+                              (if (zerop section) "Restarts" "Backtrace")))
+    (error (condition) (note "titleForHeaderInSection: ~a" condition)
+      (cffi:null-pointer))))
+
+(objc:define-objc-method ("tableView:willSelectRowAtIndexPath:" objc:objc-object-pointer)
+    ((self restarts-controller) (table objc:objc-object-pointer)
+     (index-path objc:objc-object-pointer))
+  (declare (ignorable table))
+  ;; A frame is not a choice: only the restarts can be selected.
+  (if (zerop (objc:invoke index-path "section")) index-path (cffi:null-pointer)))
 
 (objc:define-objc-method ("tableView:cellForRowAtIndexPath:" objc:objc-object-pointer)
     ((self restarts-controller)
@@ -53,8 +83,12 @@
   (handler-case
       (let* ((row (objc:invoke index-path "row"))
              (titles (controller-titles self))
-             (restart (and (>= row 0) (< row (length titles)) (nth row titles))))
-        (if restart (make-restart-cell restart) (cffi:null-pointer)))
+             (frames (getf (controller-views self) :frames)))
+        (if (zerop (objc:invoke index-path "section"))
+            (let ((restart (and (>= row 0) (< row (length titles)) (nth row titles))))
+              (if restart (make-restart-cell restart) (cffi:null-pointer)))
+            (let ((frame (and (>= row 0) (< row (length frames)) (nth row frames))))
+              (if frame (make-frame-cell frame) (cffi:null-pointer)))))
     (error (condition)
       (note "cellForRowAtIndexPath: ~a" condition)
       (cffi:null-pointer))))
@@ -68,6 +102,17 @@
       (let ((*listener* (or (controller-listener self) *listener*)))
         (activate-restart (objc:invoke index-path "row")))
     (error (condition) (note "didSelectRowAtIndexPath: ~a" condition))))
+
+(defun make-frame-cell (frame)
+  "One frame, AUTORELEASED: its line, small, grey and not selectable."
+  (let* ((cell (objc:invoke (objc:invoke "UITableViewCell" "alloc")
+                            "initWithStyle:reuseIdentifier:" 0 "frame"))
+         (label (objc:invoke cell "textLabel")))
+    (objc:invoke label "setText:" (backtrace-frame-line frame))
+    (objc:invoke label "setFont:" (uikit:mono-font *sheet-heading-font-size*))
+    (objc:invoke label "setTextColor:" (objc:invoke "UIColor" "secondaryLabelColor"))
+    (objc:invoke cell "setSelectionStyle:" 0)   ; UITableViewCellSelectionStyleNone
+    (objc:autorelease cell)))
 
 (defun make-restart-cell (row)
   "One row, AUTORELEASED: the restart's report, and under it, small and grey,
@@ -213,7 +258,7 @@ sheet comes up at whatever the system chooses, which is still a sheet."
           (objc:invoke sheet "setSelectedDetentIdentifier:" "com.apple.UIKit.large")))))
   controller)
 
-(defun build-restarts-sheet (listener heading titles cancel-index)
+(defun build-restarts-sheet (listener heading titles cancel-index &optional frames)
   "The sheet's controller, filled in.  Main thread only.
 
 Takes finished strings rather than the restarts themselves: see RESTART-TITLES
@@ -229,7 +274,8 @@ for why they cannot be printed here."
     (when data-source
       (setf (controller-titles data-source) titles
             (controller-cancel-index data-source) cancel-index
-            (controller-views data-source) (list :value-field field :value-index nil)))
+            (controller-views data-source) (list :value-field field :value-index nil
+                                                 :frames frames)))
     (objc:invoke root "setBackgroundColor:"
                  (objc:invoke "UIColor" "systemBackgroundColor"))
     (objc:invoke table "setDataSource:" target)
@@ -264,10 +310,11 @@ for why they cannot be printed here."
     controller))
 
 (defun show-restarts-panel (listener heading backtrace titles cancel-index)
-  "Present TITLES as a sheet under HEADING.  Thread 1."
-  (declare (ignore backtrace))
+  "Present TITLES, and the frames in BACKTRACE, as a sheet under HEADING.
+Thread 1."
   (hide-restarts-panel listener)
-  (let ((controller (build-restarts-sheet listener heading titles cancel-index)))
+  (let ((controller (build-restarts-sheet listener heading titles cancel-index
+                                          backtrace)))
     ;; The +1 from -alloc is the listener's, until HIDE-RESTARTS-PANEL.
     (setf (listener-restarts-panel listener) controller)
     (objc:invoke (presenting-controller listener)

@@ -34,12 +34,24 @@ paren."
       nil))
 
 (defun insert-quote (text offset)
-  "\" inserts a pair of them, unless we are already inside a string -- where it
-closes it -- or in a comment, where it is just a character."
-  (cond ((not (code-position-p text offset)) nil)
-        (t (values (concatenate 'string (subseq text 0 offset) "\"\""
-                                (subseq text offset))
-                   (1+ offset)))))
+  "\" inserts a pair of them.  Just before a string's closing quote -- the
+one this inserted -- it steps over it, as ) steps over a close paren.  Anywhere
+else in a string or a comment it declines, and is just a character.
+
+The stepping over was missing, and so every string typed at the listener came
+out wrong: the closing quote went in as a second one, \"hi\"\", and the parens
+typed after it no longer met their partners."
+  (cond ((code-position-p text offset)
+         (values (concatenate 'string (subseq text 0 offset) "\"\""
+                              (subseq text offset))
+                 (1+ offset)))
+        ;; The closing quote: in a string here, a quote next, and code again
+        ;; just past it.  In a comment the far side is comment too.
+        ((and (< offset (length text))
+              (char= (char text offset) #\")
+              (code-position-p text (1+ offset)))
+         (values text (1+ offset)))
+        (t nil)))
 
 (defun close-or-skip (text offset)
   ") steps over the close paren that is already there, rather than typing a

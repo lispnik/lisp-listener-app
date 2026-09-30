@@ -464,11 +464,18 @@ function that connects the outline to TARGET once TARGET knows the items."
              (local (and frame (cdr place)
                          (nth (cdr place) (backtrace-frame-locals frame)))))
         (if frame
-            (objc:autorelease
-             (make-label (or local (backtrace-frame-line frame))
-                         :font (objc:invoke "NSFont" "monospacedSystemFontOfSize:weight:"
-                                            11d0 0d0)
-                         :color (system-color (if local "secondaryLabelColor" "labelColor"))))
+            (let* ((text (or local (backtrace-frame-line frame)))
+                   (label (make-label text
+                                      :font (objc:invoke "NSFont"
+                                                         "monospacedSystemFontOfSize:weight:"
+                                                         11d0 0d0)
+                                      :color (system-color (if local
+                                                               "secondaryLabelColor"
+                                                               "labelColor")))))
+              ;; The row cuts a long one off at the pane's width; the whole of
+              ;; it is under the pointer.
+              (objc:invoke label "setToolTip:" text)
+              (objc:autorelease label))
             (cffi:null-pointer)))
     (error (condition) (note "viewForTableColumn:item: ~a" condition) (cffi:null-pointer))))
 
@@ -665,10 +672,16 @@ for it comes out of the frames and the list; the pane does not grow."
          (views (and controller (controller-views controller)))
          (row (and controller (nth index (controller-titles controller)))))
     (when (and views row panel)
-      (let ((field (getf views :value-field)))
+      (let ((field (getf views :value-field))
+            (already (getf views :value-index)))
         ;; The index first: the layout makes room for the field only when
         ;; there is a question.
         (setf (getf (controller-views controller) :value-index) index)
+        ;; And the room comes from the transcript, not the list: the divider
+        ;; moves up by the field's height, or the last restarts scroll away.
+        (unless already
+          (setf (getf (controller-views controller) :value-grew)
+                (move-divider listener (+ *value-row-height* *panel-gap*))))
         (objc:invoke (getf views :value-label) "setStringValue:"
                      (format nil "~a:" (restart-row-name row)))
         (objc:invoke (getf views :value-label) "setHidden:" nil)
@@ -681,6 +694,21 @@ for it comes out of the frames and the list; the pane does not grow."
         (objc:invoke (listener-window listener) "makeFirstResponder:" field)))
     t))
 
+(defun move-divider (listener delta)
+  "Give the pane DELTA more points of the window's height -- fewer, if
+negative -- and answer how many it got.  The transcript keeps a few lines."
+  (let ((split (listener-split-view listener))
+        (pane (listener-restarts-panel listener)))
+    (if (and split pane (not (cffi:null-pointer-p pane)))
+        (let* ((total (aref (objc:invoke split "bounds") 3))
+               (divider (objc:invoke split "dividerThickness"))
+               (height (aref (objc:invoke pane "frame") 3))
+               (wanted (max 0d0 (min (+ height delta) (- total divider 80d0))))
+               (moved (- wanted height)))
+          (objc:invoke split "setPosition:ofDividerAtIndex:" (- total wanted divider) 0)
+          moved)
+        0d0)))
+
 (defun hide-restart-value (listener)
   "Put the question away, if one is being asked, and give the keyboard back to
 the prompt.  Thread 1."
@@ -688,6 +716,7 @@ the prompt.  Thread 1."
          (views (and controller (controller-views controller))))
     (when (and views (getf views :value-index))
       (setf (getf (controller-views controller) :value-index) nil)
+      (move-divider listener (- (or (getf views :value-grew) 0d0)))
       (objc:invoke (getf views :value-label) "setHidden:" t)
       (objc:invoke (getf views :value-field) "setHidden:" t)
       (objc:invoke (getf views :hint) "setStringValue:"

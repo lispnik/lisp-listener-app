@@ -5,29 +5,18 @@
 ;;;; as you type; double-clicking a row, or pressing Return, puts that form in
 ;;;; the input region ready to edit; Escape closes.
 ;;;;
-;;;; An NSPanel and not a window, for the reason the restarts panel is one: it
-;;;; floats over the listener without taking the application's main window away,
-;;;; and it works during a modal session if one is ever up.
+;;;; A SHEET on the listener's own window, as an Open or Save panel is.  As a
+;;;; floating panel it sat over whichever window was in front -- with two
+;;;; listeners, over the wrong one -- and did not move with its own; the
+;;;; debugger was docked for the same reason.  A sheet is modal to its window
+;;;; only, which is right for a picker, and leaves every other listener alone.
 ;;;;
-;;;; It DOES take the keyboard, unlike the restarts panel -- there is a search
-;;;; field in it, and a search field nobody can type into is furniture.  So this
-;;;; one is ordered front AND made key, and the listener window gets the
-;;;; keyboard back when it closes.
+;;;; It takes the keyboard, unlike the debugger pane -- there is a search field
+;;;; in it, and a search field nobody can type into is furniture -- and the
+;;;; listener's text view gets it back when the sheet ends.
 
 (in-package #:lisp-listener)
 
-(defconstant +ns-window-style-utility+ 16
-  "NSWindowStyleMaskUtilityWindow; only meaningful for an NSPanel.")
-
-(defun position-history-panel (listener panel)
-  "Put the panel over the listener window, near its top left."
-  (handler-case
-      (let ((frame (objc:invoke (listener-window listener) "frame")))
-        (objc:invoke panel "setFrameTopLeftPoint:"
-                     (vector (+ (aref frame 0) 48d0)
-                             (- (+ (aref frame 1) (aref frame 3)) 48d0))))
-    (error () (objc:invoke panel "center")))
-  panel)
 
 (defparameter *history-panel-width* 620d0)
 (defparameter *history-panel-height* 400d0)
@@ -167,15 +156,11 @@ MAKE-ROW-VIEW in src/macos/restarts-panel.lisp."
          (panel (objc:invoke (objc:invoke "NSPanel" "alloc")
                              "initWithContentRect:styleMask:backing:defer:"
                              (vector 0d0 0d0 width height)
-                             (logior +ns-window-style-titled+
-                                     +ns-window-style-closable+
-                                     +ns-window-style-utility+)
+                             +ns-window-style-titled+
                              +ns-backing-store-buffered+ nil))
          (content (objc:invoke panel "contentView")))
     (objc:invoke panel "setReleasedWhenClosed:" nil)
     (objc:invoke panel "setTitle:" "History")
-    (objc:invoke panel "setFloatingPanel:" t)
-    (objc:invoke panel "setHidesOnDeactivate:" nil)
     ;; Laid out downwards from the top, as an NSView's origin is bottom left.
     (let* ((search-y (- height *history-panel-margin* *history-search-height*))
            (buttons-y *history-panel-margin*)
@@ -205,11 +190,14 @@ MAKE-ROW-VIEW in src/macos/restarts-panel.lisp."
 (defun show-history-popup (listener)
   "Put the list on screen, with the keyboard in its search field.  Thread 1."
   (hide-history-popup listener)
-  (let ((panel (build-history-panel listener)))
+  (let ((panel (build-history-panel listener))
+        (window (listener-window listener)))
     (setf (listener-history-panel listener) panel)
-    (position-history-panel listener panel)
-    ;; Key, unlike the restarts panel: there is a search field to type into.
-    (objc:invoke panel "makeKeyAndOrderFront:" nil)
+    ;; No completion handler: HIDE-HISTORY-POPUP ends it, on every path.
+    (objc:invoke window "beginSheet:completionHandler:" panel (cffi:null-pointer))
+    ;; Key, unlike the debugger pane: there is a search field to type into.
+    (objc:invoke panel "makeFirstResponder:"
+                 (objc:invoke panel "initialFirstResponder"))
     panel))
 
 (defun hide-history-popup (&optional (listener *listener*))
@@ -217,7 +205,10 @@ MAKE-ROW-VIEW in src/macos/restarts-panel.lisp."
 Thread 1.  Idempotent."
   (let ((panel (and listener (listener-history-panel listener))))
     (when (and panel (cffi:pointerp panel) (not (cffi:null-pointer-p panel)))
-      (objc:invoke panel "orderOut:" nil)
+      (let ((parent (objc:invoke panel "sheetParent")))
+        (if (cffi:null-pointer-p parent)
+            (objc:invoke panel "orderOut:" nil)
+            (objc:invoke parent "endSheet:" panel)))
       (let ((window (listener-window listener)))
         (when (and window (cffi:pointerp window) (not (cffi:null-pointer-p window)))
           (objc:invoke window "makeKeyAndOrderFront:" nil)

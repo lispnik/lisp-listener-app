@@ -182,8 +182,9 @@ NSTextView and UITextView share.
 - `src/history-search.lisp` — the history picker: ⌘R lists everything submitted,
   typing narrows it (every whitespace-separated term must appear, ignoring case),
   and a chosen row goes into the input region **unsubmitted**. The filtering is
-  pure; the list is `src/macos/history-panel.lisp` (an `NSPanel` with an
-  `NSSearchField` over an `NSTableView`) or `src/ios/history-sheet.lisp` (a sheet
+  pure; the list is `src/macos/history-panel.lisp` (a **sheet** on the listener
+  window -- an `NSSearchField` over an `NSTableView`, begun with
+  `-beginSheet:completionHandler:` and ended by `hide-history-popup`) or `src/ios/history-sheet.lisp` (a sheet
   with a `UISearchBar`), behind `show-history-popup` / `hide-history-popup` /
   `history-popup-visible-p`.
 - `src/completion.lisp` — symbol completion, from the listener's package, which
@@ -197,9 +198,12 @@ NSTextView and UITextView share.
 - `src/repl.lisp` — the listener thread, the debugger and the backtrace. Each
   frame is captured with its locals (`backtrace-frame`), printed on the listener
   thread while the stack exists; SBCL only, since ECL's frame stack keeps
-  neither arguments nor locals. The run of the implementation's own evaluator
-  at the bottom (`internal-frame-p`, by package) is trimmed when anything is
-  left above it.
+  neither arguments nor locals, and a value is capped at `*local-value-length*`.
+  The run of the implementation's own evaluator at the bottom
+  (`internal-frame-p`, by package) is trimmed when anything is left above it,
+  and cut to its innermost frame when nothing is. While the pane or sheet is up
+  (`restarts-pane-offered-p`) the transcript prints the restarts as one line of
+  numbers and names and leaves the frames to the pane.
 - `src/macos/view.lisp` — `LispListenerView` over `NSTextView`: Return, the
   arrows, and Tab through NSTextView's own completion popup.
 - `src/macos/restarts-panel.lisp` — the debugger, **docked**: the listener
@@ -220,13 +224,15 @@ NSTextView and UITextView share.
   types `1 42` at the prompt — the debugger reads a number followed by a form
   as that restart with that value (`restart-selection`). Every choice is
   typed through the view by `type-into-listener`, so the transcript shows it,
-  whatever was half-typed is put back, and the history is not touched.
+  whatever was half-typed is put back, and the history is not touched. The
+  field's room comes from the transcript: the divider moves up while it is
+  open. Frames and locals carry their full text as a tooltip.
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
   produces `doc/screenshots/`, on a CI runner, on every push.
 - `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the
   docked debugger through what a person does with it and checks each step:
   docking, frames and locals, the keys, the divider, the value field, Escape,
-  a second level. Exits 0 only if every check held; `macos.yml` runs it on
+  a second level, and the history sheet. Exits 0 only if every check held; `macos.yml` runs it on
   both architectures. **Everything in the pane is AppKit, so the headless test
   reaches none of it**; every bug in the pane's first versions was found by
   this driver and by nothing else. Run it locally with
@@ -241,7 +247,7 @@ NSTextView and UITextView share.
   Mac's table uses, presented at `UISheetPresentationController`'s medium
   detent and draggable to full height. A restart that asks for a value asks
   in a `UITextField` under the heading, hidden until then; Return sends
-  `1 42`, as on the Mac.
+  `1 42`, as on the Mac. A second section lists the frames, by name only.
 - `src/ios/app.lisp` — `ios-start`, and the self-test.
 
 `lisp-alien.png` is the icon's source art, and `res/` is what the two builders
@@ -281,8 +287,8 @@ Each of these is a bug that actually happened here.
 - **`run-listener` must not use a modal session.** It used
   `-[NSApplication runModalForWindow:]`, which blocks events to every OTHER
   window of the application — so New Listener opened a window you could see and
-  not type in. The restarts panel escapes that only by being an `NSPanel`, which
-  works during a modal session; an ordinary second window does not. It is
+  not type in; an ordinary second window gets no events during a modal
+  session. It is
   `-[NSApplication run]` now, stopped by `stop-run-loop-soon` when the last
   window closes.
 
