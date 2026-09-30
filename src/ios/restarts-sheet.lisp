@@ -32,6 +32,7 @@
 (defparameter *sheet-title-font-size* 17d0)
 (defparameter *sheet-row-font-size* 15d0)
 (defparameter *sheet-heading-font-size* 13d0)
+(defparameter *sheet-frame-row-height* 28d0)
 
 ;;; The table's data source and delegate --------------------------------------
 ;;;
@@ -103,6 +104,32 @@
         (activate-restart (objc:invoke index-path "row")))
     (error (condition) (note "didSelectRowAtIndexPath: ~a" condition))))
 
+(defun show-sheet-backtrace (listener)
+  "Take the sheet to its full height and scroll to the frames.  Thread 1."
+  (let ((controller (listener-restarts-panel listener))
+        (table (listener-restarts-table listener)))
+    (when (and controller table (not (cffi:null-pointer-p controller)))
+      (let ((sheet (objc:invoke controller "sheetPresentationController")))
+        (unless (cffi:null-pointer-p sheet)
+          (objc:invoke sheet "setSelectedDetentIdentifier:"
+                       (%ns-string-constant
+                        "UISheetPresentationControllerDetentIdentifierLarge"))))
+      (when (> (objc:invoke table "numberOfSections") 1)
+        (objc:invoke table "scrollToRowAtIndexPath:atScrollPosition:animated:"
+                     (objc:invoke "NSIndexPath" "indexPathForRow:inSection:" 0 1)
+                     1 t))                  ; UITableViewScrollPositionTop
+      t)))
+
+(objc:define-objc-method ("tableView:heightForRowAtIndexPath:" :double)
+    ((self restarts-controller) (table objc:objc-object-pointer)
+     (index-path objc:objc-object-pointer))
+  (declare (ignorable table))
+  ;; A frame is one short line; a restart is a report over its number and name.
+  (handler-case (if (zerop (objc:invoke index-path "section"))
+                    *sheet-row-height*
+                    *sheet-frame-row-height*)
+    (error () *sheet-row-height*)))
+
 (defun make-frame-cell (frame)
   "One frame, AUTORELEASED: its line, small, grey and not selectable."
   (let* ((cell (objc:invoke (objc:invoke "UITableViewCell" "alloc")
@@ -155,7 +182,7 @@ it opens at.  The table scrolls, so a long list is not a taller sheet."
      (* 3 *sheet-margin*)
      (* (max 2 count) *sheet-row-height*)))
 
-(defun make-sheet-header (heading field)
+(defun make-sheet-header (heading field &optional button)
   "A title that says the debugger level, the condition, and FIELD -- hidden
 until a restart asks for a value -- stacked.  A hidden arranged view takes no
 room, so the header is the same height until then."
@@ -170,7 +197,15 @@ room, so the header is the same height until then."
     (objc:invoke message "setFont:" (uikit:mono-font *sheet-heading-font-size*))
     (objc:invoke message "setTextColor:" (objc:invoke "UIColor" "secondaryLabelColor"))
     (objc:invoke message "setNumberOfLines:" 2)
-    (objc:invoke stack "addArrangedSubview:" title)
+    (if button
+        ;; The title, and the way to the frames at the other end of its line.
+        (let ((line (uikit:new "UIStackView")))
+          (objc:invoke line "setAxis:" 0)              ; horizontal
+          (objc:invoke line "setDistribution:" 3)      ; equal spacing
+          (objc:invoke line "addArrangedSubview:" title)
+          (objc:invoke line "addArrangedSubview:" button)
+          (objc:invoke stack "addArrangedSubview:" line))
+        (objc:invoke stack "addArrangedSubview:" title))
     (objc:invoke stack "addArrangedSubview:" message)
     (objc:invoke stack "setCustomSpacing:afterView:" 10d0 message)
     (objc:invoke stack "addArrangedSubview:" field)
@@ -268,7 +303,10 @@ for why they cannot be printed here."
          (data-source (getf (listener-retained listener) :restarts-controller))
          (target (and data-source (objc:objc-object-pointer data-source)))
          (field (make-value-field target))
-         (header (make-sheet-header heading field))
+         ;; The frames are the table's second section, below the fold at the
+         ;; height the sheet opens at; this is the way to them.
+         (to-frames (and frames (uikit:system-button "Backtrace")))
+         (header (make-sheet-header heading field to-frames))
          (table (uikit:new "UITableView"))
          (cancel (uikit:system-button "Cancel")))
     (when data-source
@@ -284,6 +322,11 @@ for why they cannot be printed here."
     (objc:invoke table "setAllowsMultipleSelection:" nil)
     (objc:invoke (objc:invoke cancel "titleLabel") "setFont:"
                  (uikit:font *sheet-title-font-size*))
+    (when to-frames
+      (uikit:on-tap to-frames
+                    (lambda (sender)
+                      (declare (ignore sender))
+                      (show-sheet-backtrace listener))))
     (uikit:on-tap cancel
                   (lambda (sender)
                     (declare (ignore sender))

@@ -70,6 +70,7 @@ an SBCL built --with-sb-safepoint; see the README for why."
                  (:file "history-panel")
                  (:file "screenshot")
                  (:file "debugger-test")
+                 (:file "demo")
                  (:file "app")))))
 
 (defsystem "lisp-listener/ios"

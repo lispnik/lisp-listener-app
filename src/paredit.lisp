@@ -36,7 +36,8 @@ paren."
 (defun insert-quote (text offset)
   "\" inserts a pair of them.  Just before a string's closing quote -- the
 one this inserted -- it steps over it, as ) steps over a close paren.  Anywhere
-else in a string or a comment it declines, and is just a character.
+else in a string it goes in escaped, \\\".  In a comment it declines, and is
+just a character.
 
 The stepping over was missing, and so every string typed at the listener came
 out wrong: the closing quote went in as a second one, \"hi\"\", and the parens
@@ -51,7 +52,25 @@ typed after it no longer met their partners."
               (char= (char text offset) #\")
               (code-position-p text (1+ offset)))
          (values text (1+ offset)))
+        ;; Anywhere else in a string, a quote goes in escaped, as Emacs's
+        ;; paredit does it: a bare one would end the string there and leave
+        ;; the rest of the line, and its parens, outside it.
+        ((in-string-p text offset)
+         (values (concatenate 'string (subseq text 0 offset) "\\\""
+                              (subseq text offset))
+                 (+ offset 2)))
         (t nil)))
+
+(defun in-string-p (text offset)
+  "True when OFFSET in TEXT lies inside a \"string\" -- after its opening
+quote, so a quote typed there would end it."
+  (let ((len (length text)) (i 0))
+    (loop while (< i offset) do
+      (multiple-value-bind (skip kind) (skip-non-code text i len)
+        (cond ((null skip) (incf i))
+              ((< offset skip) (return-from in-string-p (eq kind :string)))
+              (t (setf i skip)))))
+    nil))
 
 (defun close-or-skip (text offset)
   ") steps over the close paren that is already there, rather than typing a

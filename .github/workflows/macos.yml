@@ -82,19 +82,19 @@ jobs:
 
     steps:
       - name: Check out sbcl-macos
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           path: sbcl-macos
 
       - name: Check out objc beside it
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.OBJC_REPO }}
           ref: ${{ env.OBJC_REF }}
           path: objc
 
       - name: Check out asdf-macos-app beside it
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.MACOS_APP_REPO }}
           ref: ${{ env.MACOS_APP_REF }}
@@ -113,7 +113,7 @@ jobs:
 
       - name: Cache the safepoint SBCL
         id: sbcl-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/sbcl-safepoint
           key: sbcl-safepoint-${{ runner.os }}-${{ runner.arch }}-${{ env.SBCL_TAG }}
@@ -264,7 +264,21 @@ jobs:
           git clone --quiet sbcl-macos "$RUNNER_TEMP/fresh"
           cd "$RUNNER_TEMP/fresh"
           export PATH="$HOME/.local/bin:$PATH"
-          ocicl install
+          # Retried as the first install is, and for the same reason: ghcr.io
+          # resets connections often enough that, run once, this step failed
+          # about one run in two -- never on anything this repository did.
+          for attempt in 1 2 3 4 5; do
+            ocicl install 2>&1 | tee "$RUNNER_TEMP/ocicl-fresh.log" || true
+            if ! grep -q "failed to install" "$RUNNER_TEMP/ocicl-fresh.log"; then
+              break
+            fi
+            echo "::warning::ocicl install (fresh clone) attempt $attempt did not get every package"
+            sleep 30
+          done
+          if grep -q "failed to install" "$RUNNER_TEMP/ocicl-fresh.log"; then
+            echo "::error::ocicl could not install every dependency after 5 attempts" >&2
+            exit 1
+          fi
           echo "restored from the lockfile alone:" && ls ocicl
           env CL_SOURCE_REGISTRY="$RUNNER_TEMP/fresh/:$RUNNER_TEMP/fresh/ocicl//" \
             "$SBCL_SAFEPOINT" --non-interactive \
@@ -297,11 +311,30 @@ jobs:
 
       - name: Keep the debugger test's pictures
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: debugger-test-${{ matrix.arch }}
           path: ${{ runner.temp }}/debugger-test/*.png
           if-no-files-found: ignore
+
+      - name: Make the demo video
+        # On request only -- Run workflow, in the Actions tab -- because a
+        # runner has neither ffmpeg nor ImageMagick, and installing them would
+        # put minutes on every push for a video nobody asked for.
+        if: github.event_name == 'workflow_dispatch' && matrix.arch == 'arm64'
+        working-directory: sbcl-macos
+        run: |
+          set -eux
+          brew install ffmpeg imagemagick
+          perl -e 'alarm shift; exec @ARGV' 1200 make demo SBCL="$SBCL_SAFEPOINT"
+
+      - name: Keep the demo video
+        if: github.event_name == 'workflow_dispatch' && matrix.arch == 'arm64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: demo
+          path: sbcl-macos/build/demo/lisp-listener-demo.mp4
+          if-no-files-found: error
 
       - name: Take the screenshots
         # arm64 only: the pictures are for the README, and two of the same thing
@@ -379,7 +412,7 @@ jobs:
         # and skipping the upload on failure hides exactly the run worth
         # looking at.
         if: always() && matrix.arch == 'arm64'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenshots
           path: ${{ runner.temp }}/screenshots/*.png

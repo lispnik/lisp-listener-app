@@ -41,8 +41,12 @@ were when it failed. The listener's own frames are cut, and so are the
 evaluator's under your code, and `lisp-listener:*backtrace-frames*` sets the
 depth.
 
-It is an **addition**. The transcript still prints the list, the prompt still
-takes a number, and the keyboard stays at the prompt while the pane is up.
+It is an **addition**. The prompt still takes a number — or a number and a
+form, `1 42`, for a restart that wants a value — and the keyboard stays at the
+prompt while the pane is up. The transcript keeps the condition and a line of
+what each number means, `Restarts: 0 CONTINUE · 1 USE-VALUE … · 3 ABORT`, and
+leaves the full list and the frames to the pane; with the pane switched off it
+prints them all.
 Choosing a restart *types its number for you*, where you can see it: a restart
 has to be invoked on the listener thread, inside the dynamic extent of the
 debugger that established it, and that thread is already sitting in
@@ -62,13 +66,30 @@ responsive, and Interrupt (⌘.) gets the prompt back.
 
 ![Interrupting a long-running form](doc/screenshots/interrupt.png)
 
-These three are not staged. `src/macos/screenshot.lisp` drives a real listener and
+These pictures are not staged. `src/macos/screenshot.lisp` drives a real listener and
 photographs it, and `.github/workflows/macos.yml` runs it on every push — so
 they are always a picture of the current code, taken on a GitHub macOS runner.
 
 The capture asks the window's frame view to draw itself into a bitmap, which
 is why the title bar is in the picture and why no Screen Recording permission
 is involved: nothing is photographed off the screen.
+
+### Typing
+
+- **Parens and quotes close themselves**, and typing the closer steps over the
+  one already there; the paren at the caret and its partner are tinted, red
+  when it has none. The structural commands are Emacs paredit's — `C-)` slurp,
+  `C-}` barf, `M-(` wrap, `M-s` splice, `C-k` kill, `C-M-f`/`C-M-b` move — and
+  `(setf (lisp-listener:paredit-key "C-(") 'slurp-backward)` rebinds, in
+  `init.lisp` if it should last.
+- **Return evaluates; Option-Return starts a new line**, indented the way Lisp
+  is indented: a body two in, a call under its first argument. Whether an
+  operator takes a body is asked of the running image, so your own macros
+  indent too.
+- **Tab** completes the symbol before the caret, from the listener's package.
+- **↑ and ↓** walk the history, and **⌘R** searches all of it: type to narrow,
+  and the form you choose goes back at the prompt to edit. The history is kept
+  between launches.
 
 ## Requirements
 
@@ -301,9 +322,7 @@ red — "no offenders" is also what an empty scan says.
   `env -u SBCL_HOME` is the workaround.
 - Interrupting with ⌘. a form that is blocked inside a foreign call takes
   effect when the call returns, which is the ordinary SBCL caveat.
-- History is per-session and not saved.
-- There is no completion, no editor integration and no inspector. It is a
-  Listener.
+- There is no editor integration and no inspector. It is a Listener.
 
 ## Licence
 

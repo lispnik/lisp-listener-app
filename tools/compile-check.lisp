@@ -49,7 +49,7 @@
 
 (defparameter *front-ends*
   '(("macos" "macos/view" "macos/window" "macos/restarts-panel"
-     "macos/history-panel" "macos/screenshot" "macos/debugger-test"
+     "macos/history-panel" "macos/screenshot" "macos/debugger-test" "macos/demo"
      "macos/app")
     ("ios" "ios/view" "ios/restarts-sheet" "ios/history-sheet" "ios/app")))
 

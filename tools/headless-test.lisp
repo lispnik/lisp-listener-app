@@ -670,7 +670,26 @@ leaves the caret as much as on the text -- and a test that says
   (multiple-value-bind (start end) (sexp-span-at "'(a) b" 0)
     (check (and (= start 0) (= end 4)) "a reader prefix belongs to the span"))
   (check (equal '((1 . 2) (3 . 4)) (sexp-spans "(a b)" 1 4))
-         "the children of a list are its spans"))
+         "the children of a list are its spans")
+  ;; Reader syntax the scanner used not to know, each of which made a paren
+  ;; that is not one look like one.
+  ;; (a #| ) |# b)
+  (check (eql 12 (paren-match-offset "(a #| ) |# b)" 0))
+         "a paren in a #| block comment |# is not a paren")
+  (check (eql 20 (paren-match-offset "(a #| #| ) |# ) |# b)" 0))
+         "and block comments nest")
+  (check (not (code-position-p "(a #| x |#)" 6)) "inside a block comment is not code")
+  ;; (a |x)y| b)
+  (check (eql 10 (paren-match-offset "(a |x)y| b)" 0))
+         "a paren in a |symbol| is not a paren")
+  (check (not (code-position-p "(a |x)y| b)" 5)) "inside a |symbol| is not code")
+  (check (equal '(0 5) (multiple-value-list (sexp-span-at "|a b| c" 0)))
+         "and a |symbol with a space| is one atom")
+  ;; (a \) b)
+  (check (eql 7 (paren-match-offset "(a \\) b)" 0))
+         "an escaped paren is not a paren")
+  (check (eql 0 (innermost-open-paren "(list #| ( |# a " 15))
+         "and indentation looks past all of them"))
 
 (defmacro cl-user::body-after-one (thing &body body)
   "A macro nothing else knows about, so its indentation can only have come from
@@ -731,8 +750,8 @@ its lambda list."
   (check-edit 'insert-quote "(list \"hi|\")" "(list \"hi\"|)"
               "\" before the closing quote steps over it, as ) does")
   (check-edit 'insert-quote "(list \"|\")" "(list \"\"|)" "and so from an empty string")
-  (check-edit 'insert-quote "(list \"a|b\")" :declined
-              "in the middle of a string it is just a character")
+  (check-edit 'insert-quote "(list \"a|b\")" "(list \"a\\\"|b\")"
+              "in the middle of a string it goes in escaped, and the string goes on")
   (check-edit 'close-or-skip "(list (a|)" "(list (a)|" ") steps over the close paren")
   (check-edit 'close-or-skip "(list (a|" :declined
               ") with nothing to step over declines, so the paren is typed")

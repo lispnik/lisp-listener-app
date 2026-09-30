@@ -13,143 +13,139 @@
 ;;;; could come here at all.  THE TWO COPIES ARE NOW SEPARATE: a fix here does
 ;;;; not reach revl, and vice versa.
 ;;;;
-;;;; What the scanners all know, and all agree about: a `;' comment runs to the
-;;;; end of the line, a "string" ends at the first unescaped quote, and #\( is a
-;;;; character literal rather than a paren.  What none of them know: [ and {,
-;;;; #|block comments|#, and |symbols with bars|.  Each call rescans from the
-;;;; start of the string, which for one line of input is nothing.
+;;;; What the scanners all know, from one place (SKIP-NON-CODE), and so all
+;;;; agree about: a `;' comment runs to the end of the line; a "string" ends at
+;;;; the first unescaped quote; #|block comments|# nest; a |symbol with bars|
+;;;; is one atom, parens and spaces included; #\( is a character and \( an
+;;;; escaped one, neither a paren.  [ and { are constituents in standard syntax,
+;;;; and so they are here.  Each call rescans from the start of the string,
+;;;; which for one line of input is nothing.
 
 (in-package #:lisp-listener)
 
 ;;; Scanning -------------------------------------------------------------------
+;;;
+;;; Every scanner below walks the text a character at a time and asks one
+;;; question first: does something that is NOT code begin here?  SKIP-NON-CODE
+;;; answers it for all of them -- once, so they cannot disagree, which is what
+;;; five hand-written copies of the same `skip a string' did the moment one
+;;; learned something the others had not.
+
+(defun skip-non-code (text i &optional (end (length text)))
+  "If position I in TEXT begins something that is not code, answer where it
+ends, and what it is: :COMMENT, :STRING, :BLOCK-COMMENT, :SYMBOL (a |symbol|),
+:CHARACTER (#\\x) or :ESCAPE (\\x).  NIL when I is plain code.
+
+A `;' comment ends BEFORE its newline, which is code again.  Anything not closed
+by END runs to END -- the input region is usually half-typed.  Block comments
+nest, as the reader nests them.  END bounds the scan, never the text: a string
+still ends at its own closing quote when that lies past END."
+  (let ((len (length text)))
+    (flet ((at (j ch) (and (< j len) (char= (char text j) ch))))
+      (when (< i end)
+        (let ((c (char text i)))
+          (cond
+            ((char= c #\;)
+             (values (or (position #\Newline text :start i :end end) end) :comment))
+            ((char= c #\")
+             (let ((j (1+ i)))
+               (loop (cond ((>= j len) (return (values len :string)))
+                           ((char= (char text j) #\\) (incf j 2))
+                           ((char= (char text j) #\") (return (values (1+ j) :string)))
+                           (t (incf j))))))
+            ((char= c #\|)
+             (let ((j (1+ i)))
+               (loop (cond ((>= j len) (return (values len :symbol)))
+                           ((char= (char text j) #\\) (incf j 2))
+                           ((char= (char text j) #\|) (return (values (1+ j) :symbol)))
+                           (t (incf j))))))
+            ((and (char= c #\#) (at (1+ i) #\|))
+             (let ((j (+ i 2)) (depth 1))
+               (loop (cond ((>= j len) (return (values len :block-comment)))
+                           ((and (char= (char text j) #\|) (at (1+ j) #\#))
+                            (incf j 2)
+                            (when (zerop (decf depth))
+                              (return (values j :block-comment))))
+                           ((and (char= (char text j) #\#) (at (1+ j) #\|))
+                            (incf j 2) (incf depth))
+                           (t (incf j))))))
+            ((and (char= c #\#) (at (1+ i) #\\))
+             (values (min len (+ i 3)) :character))
+            ((char= c #\\)
+             (values (min len (+ i 2)) :escape))
+            (t nil)))))))
 
 (defun paren-match-offset (text target)
   "TEXT[TARGET] is ( or ).  The matching paren's offset, or NIL."
   (let ((n (length text)) (stack '()) (i 0))
     (loop while (< i n) do
-      (let ((c (char text i)))
-        (cond
-          ((char= c #\;)
-           (loop while (and (< i n) (char/= (char text i) #\Newline)) do (incf i)))
-          ((char= c #\")
-           (incf i)
-           (loop while (< i n) do
-             (let ((d (char text i)))
-               (incf i)
-               (cond ((char= d #\\) (incf i))
-                     ((char= d #\") (return))))))
-          ((and (char= c #\#) (< (1+ i) n) (char= (char text (1+ i)) #\\))
-           (incf i 3))
-          ((char= c #\() (push i stack) (incf i))
-          ((char= c #\))
-           (let ((open (and stack (pop stack))))
-             (when (and open (or (= open target) (= i target)))
-               (return-from paren-match-offset (if (= i target) open i))))
-           (incf i))
-          (t (incf i)))))
+      (let ((skip (skip-non-code text i n)))
+        (if skip
+            (setf i skip)
+            (let ((c (char text i)))
+              (cond
+                ((char= c #\() (push i stack))
+                ((char= c #\))
+                 (let ((open (and stack (pop stack))))
+                   (when (and open (or (= open target) (= i target)))
+                     (return-from paren-match-offset (if (= i target) open i))))))
+              (incf i)))))
     nil))
 
 (defun code-position-p (text position)
-  "True when POSITION in TEXT is ordinary code -- not inside a string, a `;'
-comment or a #\\ character literal."
+  "True when POSITION in TEXT is ordinary code -- not inside a string, a
+comment, a #\\ character, a |symbol| or an escaped character."
   (let ((len (length text)) (i 0))
-    (loop while (< i len) do
-      (when (> i position) (return))
-      (let ((c (char text i)))
-        (cond
-          ((char= c #\;)
-           (let ((j i))
-             (loop while (and (< i len) (char/= (char text i) #\Newline)) do (incf i))
-             (when (and (<= j position) (< position i))
-               (return-from code-position-p nil))))
-          ((char= c #\")
-           (let ((j i))
-             (incf i)
-             (loop while (< i len) do
-               (let ((d (char text i)))
-                 (incf i)
-                 (cond ((char= d #\\) (incf i))
-                       ((char= d #\") (return)))))
-             (when (and (<= j position) (< position i))
-               (return-from code-position-p nil))))
-          ((and (char= c #\#) (< (1+ i) len) (char= (char text (1+ i)) #\\))
-           (let ((j i))
-             (incf i 3)
-             (when (and (<= j position) (< position i))
-               (return-from code-position-p nil))))
-          (t (incf i)))))
+    (loop while (and (< i len) (<= i position)) do
+      (multiple-value-bind (skip) (skip-non-code text i len)
+        (cond ((null skip) (incf i))
+              ((< position skip) (return-from code-position-p nil))
+              (t (setf i skip)))))
     t))
+
+(defun enclosing-list (text offset inclusive)
+  "(values START END) of the innermost () form containing OFFSET, END one past
+its close paren.  INCLUSIVE counts a position just past the close as inside."
+  (let ((len (length text)) (stack '()) (best nil) (i 0))
+    (loop while (< i len) do
+      (let ((skip (skip-non-code text i len)))
+        (if skip
+            (setf i skip)
+            (let ((c (char text i)))
+              (cond
+                ((char= c #\() (push i stack))
+                ((char= c #\))
+                 (when stack
+                   (let ((start (pop stack)))
+                     (when (and (<= start offset)
+                                (if inclusive (<= offset (1+ i)) (< offset (1+ i)))
+                                (or (null best) (> start (car best))))
+                       (setf best (cons start (1+ i))))))))
+              (incf i)))))
+    (when best (values (car best) (cdr best)))))
 
 (defun sexp-bounds (text offset)
   "(values START END) of the innermost () form containing OFFSET, or NIL.
 END is exclusive of nothing: it is one past the closing paren."
-  (let ((len (length text)) (stack '()) (best nil) (i 0))
-    (loop while (< i len) do
-      (let ((c (char text i)))
-        (cond
-          ((char= c #\;)
-           (loop while (and (< i len) (char/= (char text i) #\Newline)) do (incf i)))
-          ((char= c #\")
-           (incf i)
-           (loop while (< i len) do
-             (let ((d (char text i)))
-               (incf i)
-               (cond ((char= d #\\) (incf i))
-                     ((char= d #\") (return))))))
-          ((and (char= c #\#) (< (1+ i) len) (char= (char text (1+ i)) #\\))
-           (incf i 3))
-          ((char= c #\() (push i stack) (incf i))
-          ((char= c #\))
-           (when stack
-             (let ((start (pop stack)))
-               (when (and (<= start offset) (<= offset (1+ i))
-                          (or (null best) (> start (car best))))
-                 (setf best (cons start (1+ i))))))
-           (incf i))
-          (t (incf i)))))
-    (when best (values (car best) (cdr best)))))
+  (enclosing-list text offset t))
 
 (defun inner-list (text offset)
   "Like SEXP-BOUNDS but with an exclusive end: a position sitting just past a
 form's closing `)' belongs to the ENCLOSING list, not to that form.  So a caret
 in the whitespace between two siblings resolves to their parent, which is what
 transposing two of them wants."
-  (let ((len (length text)) (stack '()) (best nil) (i 0))
-    (loop while (< i len) do
-      (let ((c (char text i)))
-        (cond
-          ((char= c #\;)
-           (loop while (and (< i len) (char/= (char text i) #\Newline)) do (incf i)))
-          ((char= c #\")
-           (incf i)
-           (loop while (< i len) do
-             (let ((d (char text i)))
-               (incf i)
-               (cond ((char= d #\\) (incf i))
-                     ((char= d #\") (return))))))
-          ((and (char= c #\#) (< (1+ i) len) (char= (char text (1+ i)) #\\))
-           (incf i 3))
-          ((char= c #\() (push i stack) (incf i))
-          ((char= c #\))
-           (when stack
-             (let ((start (pop stack)))
-               (when (and (<= start offset) (< offset (1+ i))
-                          (or (null best) (> start (car best))))
-                 (setf best (cons start (1+ i))))))
-           (incf i))
-          (t (incf i)))))
-    (when best (values (car best) (cdr best)))))
+  (enclosing-list text offset nil))
 
 (defun sexp-span-at (text from)
   "From FROM, skip whitespace and comments, then (values START END) of the one
 sexp beginning there -- an atom, a string, or a balanced () list, with any
 leading reader prefixes (' ` , ,@) -- or NIL when none remains."
   (let ((len (length text)) (i from))
+    ;; Whitespace and comments, of both kinds.
     (loop while (< i len) do
-      (let ((c (char text i)))
-        (cond ((member c '(#\Space #\Tab #\Newline #\Return #\Page)) (incf i))
-              ((char= c #\;)
-               (loop while (and (< i len) (char/= (char text i) #\Newline)) do (incf i)))
+      (multiple-value-bind (skip kind) (skip-non-code text i len)
+        (cond ((member (char text i) '(#\Space #\Tab #\Newline #\Return #\Page)) (incf i))
+              ((member kind '(:comment :block-comment)) (setf i skip))
               (t (return)))))
     (when (< i len)
       (let ((start i))
@@ -162,38 +158,29 @@ leading reader prefixes (' ` , ,@) -- or NIL when none remains."
               ((char= c #\()
                (let ((depth 0))
                  (loop while (< i len) do
-                   (let ((d (char text i)))
-                     (cond
-                       ((char= d #\;)
-                        (loop while (and (< i len) (char/= (char text i) #\Newline))
-                              do (incf i)))
-                       ((char= d #\")
-                        (incf i)
-                        (loop while (< i len) do
-                          (let ((e (char text i)))
-                            (incf i)
-                            (cond ((char= e #\\) (incf i))
-                                  ((char= e #\") (return))))))
-                       ((and (char= d #\#) (< (1+ i) len)
-                             (char= (char text (1+ i)) #\\))
-                        (incf i 3))
-                       ((char= d #\() (incf depth) (incf i))
-                       ((char= d #\)) (incf i) (decf depth)
-                        (when (zerop depth) (return)))
-                       (t (incf i)))))))
+                   (let ((skip (skip-non-code text i len)))
+                     (if skip
+                         (setf i skip)
+                         (let ((d (char text i)))
+                           (incf i)
+                           (cond ((char= d #\() (incf depth))
+                                 ((char= d #\))
+                                  (decf depth)
+                                  (when (zerop depth) (return))))))))))
               ((char= c #\")
-               (incf i)
-               (loop while (< i len) do
-                 (let ((e (char text i)))
-                   (incf i)
-                   (cond ((char= e #\\) (incf i))
-                         ((char= e #\") (return))))))
+               (setf i (skip-non-code text i len)))
               (t
-               (loop while (and (< i len)
-                                (not (member (char text i)
-                                             '(#\Space #\Tab #\Newline #\Return
-                                               #\Page #\( #\) #\" #\;))))
-                     do (incf i))))))
+               ;; An atom runs to whitespace, a paren, a quote or a comment --
+               ;; but a |bar| or a \escape inside it is part of it, space and
+               ;; all.
+               (loop while (< i len) do
+                 (multiple-value-bind (skip kind) (skip-non-code text i len)
+                   (cond ((member kind '(:symbol :escape :character)) (setf i skip))
+                         ((member (char text i) '(#\Space #\Tab #\Newline #\Return
+                                                  #\Page #\( #\) #\" #\;))
+                          (return))
+                         ((and (eq kind :block-comment) (> i start)) (return))
+                         (t (incf i)))))))))
         (values start i)))))
 
 (defun sexp-spans (text start &optional (limit (length text)))

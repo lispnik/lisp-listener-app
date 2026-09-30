@@ -5,7 +5,7 @@
 
 SBCL ?= sbcl
 
-.PHONY: deps check syntax-check compile-check test test-ecl run app \
+.PHONY: deps check syntax-check compile-check test test-ecl run app demo \
         ios-toolchain ios run-ios clean
 
 ECL ?= ecl
@@ -62,6 +62,16 @@ run:
 ## safepoint build exists to remove.
 app:
 	$(SBCL) --eval '(asdf:make "lisp-listener-app")' --quit
+
+## A captioned video of a session in the real window, typed a key at a time:
+## build/demo/lisp-listener-demo.mp4.  Needs ffmpeg (with libass) and
+## ImageMagick; see src/macos/demo.lisp and tools/make-demo.sh.
+demo:
+	rm -rf build/demo
+	LISP_LISTENER_DEMO=$(CURDIR)/build/demo $(SBCL) --non-interactive \
+	    --eval '(require :asdf)' \
+	    --eval '(asdf:load-system "lisp-listener")' --eval '(lisp-listener:main)'
+	tools/make-demo.sh build/demo
 
 ## The iOS app.  ios-toolchain builds, once, the host and simulator ECLs that
 ## asdf-ios-app cross-compiles with (about ten minutes); set

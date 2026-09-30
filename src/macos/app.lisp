@@ -76,6 +76,15 @@ with NIL and builds a fresh one.")
       (note "self-test: ~a" condition)
       (objc:invoke (objc.runloop:shared-application) "terminate:" nil))))
 
+(objc:define-objc-method ("listenerDemo:" :void)
+    ((self listener-controller) (timer objc:objc-object-pointer))
+  (declare (ignorable timer))
+  ;; RUN-DEMO leaves with its verdict, like the screenshots.
+  (handler-case (run-demo)
+    (error (condition)
+      (note "demo: ~a" condition)
+      (finish-and-exit 4))))
+
 (objc:define-objc-method ("listenerDebuggerTest:" :void)
     ((self listener-controller) (timer objc:objc-object-pointer))
   (declare (ignorable timer))
@@ -262,6 +271,9 @@ so nothing driven from this point could pump anything."
 (defun schedule-screenshots (seconds)
   (schedule-after seconds "listenerScreenshots:"))
 
+(defun schedule-demo (seconds)
+  (schedule-after seconds "listenerDemo:"))
+
 (defun schedule-debugger-test (seconds)
   (schedule-after seconds "listenerDebuggerTest:"))
 
@@ -283,12 +295,33 @@ Does not return: -[NSApplication run] does not."
   ;; calls it again.
   (objc:ensure-objc-initialized :modules (list +cocoa-framework+))
   (require-window-server)
+  (isolate-driven-history)
   (build-listener)
   (cond
     ((uiop:getenv "LISP_LISTENER_SCREENSHOT") (schedule-screenshots 1.0))
     ((uiop:getenv "LISP_LISTENER_DEBUGGER_TEST") (schedule-debugger-test 1.0))
+    ((uiop:getenv "LISP_LISTENER_DEMO") (schedule-demo 1.0))
     ((uiop:getenv "LISP_LISTENER_SELFTEST") (schedule-self-test 1.5)))
   (objc.runloop:run-cocoa-application))
+
+(defun isolate-driven-history ()
+  "When the application is being DRIVEN -- screenshots, the debugger test, the
+demo, the self-test -- keep its history in a fresh directory beside what the run
+writes, and out of the person's own.
+
+Every line those drivers type is submitted like any other, and history is kept
+between launches: until this, each local run of the debugger test left its
+forms in ~/Library/Application Support/Lisp Listener/history.lisp-expr, and
+the demo's ⌘R list showed a page of them."
+  (let ((place (or (uiop:getenv "LISP_LISTENER_SCREENSHOT")
+                   (uiop:getenv "LISP_LISTENER_DEBUGGER_TEST")
+                   (uiop:getenv "LISP_LISTENER_DEMO")
+                   (let ((png (uiop:getenv "LISP_LISTENER_SELFTEST")))
+                     (and png (namestring (uiop:pathname-directory-pathname png)))))))
+    (when place
+      (let ((directory (merge-pathnames "history/" (uiop:ensure-directory-pathname place))))
+        (uiop:delete-directory-tree directory :validate t :if-does-not-exist :ignore)
+        (setf *history-directory* directory)))))
 
 (defun require-window-server ()
   "Leave, with a reason, when there is nothing to draw on.

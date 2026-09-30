@@ -30,6 +30,7 @@ make deps           # ocicl install -- restores ./ocicl/ from ocicl.csv
 make check          # all three off-macOS checks; the listener runs on SBCL and ECL
 make run            # a listener from a REPL, on thread 1
 make app            # => build/Lisp Listener.app
+make demo           # => build/demo/lisp-listener-demo.mp4 (needs ffmpeg, ImageMagick)
 
 make ios-toolchain  # once: asdf-ios-app builds the host and iOS ECLs (~10 min)
 make ios            # => build/iphonesimulator/Lisp Listener.app
@@ -130,7 +131,7 @@ order is load-bearing**:
   sexp paredit keymap indent transcript completion paren-highlight paredit-view
   history-search streams config restarts repl`. No toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
-  history-panel screenshot debugger-test app`. The name it always had.
+  history-panel screenshot debugger-test demo app`. The name it always had.
 - `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet app`.
 
 `tools/compile-check.lisp` and `tools/headless-test.lisp` each carry the same
@@ -155,8 +156,10 @@ NSTextView and UITextView share.
   the `define-listener-method` macro (every IMP wrapped in `handler-case`).
 - `src/sexp.lisp` — the sexp scanner, **copied from `revl`** (lispnik's own MIT
   editor) and renamed: paren matching and the structural edits, over a string and
-  a character offset. It knows about strings, `;` comments and `#\(`; it does not
-  know `[`, `{`, `#|…|#` or `|symbols|`. The two copies are now separate.
+  a character offset. Every scan asks `skip-non-code` first, so they all agree on
+  what is not code: `;` comments, strings, nested `#|…|#`, `|symbols|` (spaces
+  and parens included), `#\(` and `\(`. `[` and `{` are constituents, as in
+  standard syntax. The two copies are now separate.
 - `src/paredit.lisp` — the commands, each `(text offset) → (values text offset)`
   or NIL to decline. Balanced insertion is written here; the structural ones wrap
   `apply-structural-edit`. Pure, so `make test` covers all of it.
@@ -229,10 +232,16 @@ NSTextView and UITextView share.
   open. Frames and locals carry their full text as a tooltip.
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
   produces `doc/screenshots/`, on a CI runner, on every push.
+- `src/macos/demo.lisp` — `LISP_LISTENER_DEMO=<dir>` plays a scripted session a
+  key at a time and photographs each step; `tools/make-demo.sh` makes the
+  captioned video, and `make demo` does both. A sheet is a window of its own, so
+  it is composited in -- under the title bar, where a sheet hangs, not where its
+  frame says. CI makes it only on Run workflow (`workflow_dispatch`), arm64.
 - `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the
   docked debugger through what a person does with it and checks each step:
   docking, frames and locals, the keys, the divider, the value field, Escape,
-  a second level, and the history sheet. Exits 0 only if every check held; `macos.yml` runs it on
+  a second level, the history sheet, and a second listener beside the first.
+  Exits 0 only if every check held; `macos.yml` runs it on
   both architectures. **Everything in the pane is AppKit, so the headless test
   reaches none of it**; every bug in the pane's first versions was found by
   this driver and by nothing else. Run it locally with
@@ -408,13 +417,14 @@ Each of these is a bug that actually happened here.
   `0: (SIMPLE…`. The restart table escaped only because its column was made at
   a width near the right one.
 
-- **On iOS, Interrupt can only reach a listener that is WAITING.** A running
-  computation cannot be stopped at all: in the app this ECL delivers no
-  interrupt to a thread -- measured on a plain spinning thread, not just on the
-  listener's -- and `mp:process-kill` leaves it running too. So `(loop)` typed
-  on a phone is there until the app is killed, and the iOS self-test types no
-  such form, because nothing could get the listener back. On the Mac both
-  states work. Worth raising with lispnik/ecl rather than working around here.
+- **asdf-ios-app must trap ECL's interrupt signal.** Its `ECLBoot.m` switched
+  off ECL's handlers for the fault signals -- they fight iOS and the debugger --
+  and `ECL_OPT_TRAP_INTERRUPT_SIGNAL` went off in the same block. That one is not
+  a fault: it is the signal ECL sends its own thread to run an interrupt, and
+  untrapped the interrupt is simply lost. So `(loop)` typed on a phone could not
+  be stopped, on any thread, and this file said so and blamed ECL. The iOS
+  self-test now types `(loop)` and presses Stop, last, and fails with the option
+  off.
 
 - **Interrupt needs two mechanisms, and the choice must be made under the
   queue's lock.** An interrupt that aborts does not reliably unwind a thread out
@@ -527,6 +537,13 @@ Each of these is a bug that actually happened here.
   taken in between had it or not. Taken locally, all four still differ from run
   to run if you are using the machine: a window that happens to be key draws
   coloured traffic lights and a caret.
+
+- **A driven run must not write the person's history.** The screenshots, the
+  debugger test, the demo and the self-test submit lines like anyone, and the
+  history is kept between launches: every local run of the debugger test left
+  its forms in `~/Library/Application Support/Lisp Listener/`, and the demo's ⌘R
+  list showed a page of them. `isolate-driven-history` points
+  `*history-directory*` into the run's own output when any of them is on.
 
 - **Write CI scratch files to `$RUNNER_TEMP`,** and screenshots too. Writing them
   under `doc/screenshots/` makes `test -s` pass against the *committed* files and

@@ -25,6 +25,9 @@
 
 (defvar *debugger-test-failures* 0)
 
+;;; Defined in app.lisp, which loads after this file.
+(declaim (ftype function new-listener))
+
 (defun check-step (ok format-control &rest arguments)
   (unless ok (incf *debugger-test-failures*))
   (note "debugger-test: ~:[FAIL~;ok  ~]  ~?" ok format-control arguments)
@@ -274,6 +277,37 @@ editing it, which is what AppKit makes first responder for a text field."
       (check-step (first-responder-is-p window pointer) "with the keyboard at the prompt"))
     (replace-pending-input view pointer "")))
 
+(defun debugger-test-two-listeners (first)
+  "A second listener, as New Listener opens one: its debugger, its keys and its
+history are its own, and closing it leaves the first as it was."
+  (let* ((second (new-listener :title "Second Listener"))
+         (first-window (listener-window first))
+         (second-window (listener-window second)))
+    (check-step (wait-for (lambda () (waiting-at-top-level-p second)) :timeout 20)
+                "New Listener opens a second window, at its own prompt")
+    (check-step (raise-error second "(car 'second)") "an error in the second")
+    (check-step (cffi:pointer-eq (objc:invoke (listener-restarts-panel second) "window")
+                                 second-window)
+                "docks its pane in the second window")
+    (check-step (= 1 (subview-count (listener-split-view first)))
+                "and not in the first, which is still just its transcript")
+    (check-step (not (press-key-equivalent first-window "0"))
+                "⌘0 in the first window is not the second's to take")
+    (check-step (restarts-panel-visible-p second) "so the second is still in its debugger")
+    (open-history-popup second)
+    (pump-for 0.3d0)
+    (check-step (cffi:pointer-eq (objc:invoke (listener-history-panel second) "sheetParent")
+                                 second-window)
+                "⌘R in the second window is a sheet on the second window")
+    (hide-history-popup second)
+    (press-key-equivalent second-window "0")
+    (check-step (back-at-top-p second) "⌘0 in its own window returns it to its top level")
+    (objc:invoke second-window "close")
+    (pump-for 0.5d0)
+    (check-step (not (member second *listeners*)) "closing it ends that listener")
+    (check-step (and (submit-and-wait first "(+ 2 3)" "5") t)
+                "and the first, untouched, still evaluates")))
+
 (defun run-debugger-test ()
   "Drive the pane and check it.  Exits 0 only when every check held."
   (let ((listener *listener*)
@@ -290,6 +324,7 @@ editing it, which is what AppKit makes first responder for a text field."
     (debugger-test-pending-input listener)
     (debugger-test-levels listener)
     (debugger-test-history listener)
+    (debugger-test-two-listeners listener)
     (note "debugger-test: ~:[~d FAILED~;PASS~]"
           (zerop *debugger-test-failures*) *debugger-test-failures*)
     (finish-and-exit (if (zerop *debugger-test-failures*) 0 1))))

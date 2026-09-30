@@ -58,27 +58,19 @@ shadowing symbol of the same name indents the same way.")
 (defun innermost-open-paren (text offset)
   "The offset of the innermost ( before OFFSET that is not closed before it,
 or NIL at top level.  The second value is true when OFFSET is inside a string,
-where a newline is part of the string and no indentation belongs."
-  (let ((stack '()) (i 0))
+a |symbol| or a #| block comment |#, where a newline is part of the text and no
+indentation belongs.  A `;' comment is not one of them: the newline ends it."
+  (let ((stack '()) (i 0) (len (length text)))
     (loop while (< i offset) do
-      (let ((c (char text i)))
-        (cond
-          ((char= c #\;)
-           (loop while (and (< i offset) (char/= (char text i) #\Newline)) do (incf i)))
-          ((char= c #\")
-           (incf i)
-           (loop
-             (when (>= i offset)
+      (multiple-value-bind (skip kind) (skip-non-code text i len)
+        (cond ((null skip)
+               (case (char text i)
+                 (#\( (push i stack))
+                 (#\) (pop stack)))
+               (incf i))
+              ((and (< offset skip) (member kind '(:string :symbol :block-comment)))
                (return-from innermost-open-paren (values (first stack) t)))
-             (let ((d (char text i)))
-               (incf i)
-               (cond ((char= d #\\) (incf i))
-                     ((char= d #\") (return))))))
-          ((and (char= c #\#) (< (1+ i) offset) (char= (char text (1+ i)) #\\))
-           (incf i 3))
-          ((char= c #\() (push i stack) (incf i))
-          ((char= c #\)) (pop stack) (incf i))
-          (t (incf i)))))
+              (t (setf i skip)))))
     (values (first stack) nil)))
 
 (defun text-column (text position)

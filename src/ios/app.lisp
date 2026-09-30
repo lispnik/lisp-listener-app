@@ -213,11 +213,9 @@ A step whose predicate has not held within its time fails."
            (let ((view (listener-view-object listener))
                  (pointer (listener-view listener)))
              (replace-pending-input view pointer ""))))
-   ;; Stop, on a form half read -- which is all it can do here.  A running
-   ;; computation cannot be stopped on iOS at all: this ECL delivers no
-   ;; interrupt to a thread in the app, and does not kill one either
-   ;; (measured; see CLAUDE.md).  So nothing below types a form that loops,
-   ;; because nothing could get the listener back.
+   ;; Stop, on a form half read.  A form still RUNNING is stopped at the end
+   ;; of this list: if that ever fails nothing gets the listener back, so it
+   ;; goes last, where it can fail only itself.
    (list "Stop is asked, mid-form" (lambda () (at-top-level-prompt-p listener))
          (lambda ()
            (let ((view (listener-view-object listener))
@@ -248,6 +246,18 @@ A step whose predicate has not held within its time fails."
                                (objc:invoke table "numberOfRowsInSection:" 1))))
              (unless (and frames (plusp frames))
                (error "~a section~:p, ~a frame row~:p" sections frames)))))
+   (list "Backtrace scrolls to them" (constantly t)
+         (lambda ()
+           (unless (show-sheet-backtrace listener)
+             (error "there was no sheet to show them in"))))
+   (list "and they are on screen"
+         (lambda ()
+           (let* ((table (listener-restarts-table listener))
+                  (visible (objc:invoke table "indexPathsForVisibleRows")))
+             (loop for i from 0 below (objc:invoke visible "count")
+                   thereis (= 1 (objc:invoke (objc:invoke visible "objectAtIndex:" i)
+                                             "section")))))
+         nil)
    (list :hold nil nil)
    (list "Cancel returns to the top level" (constantly t)
          (lambda ()
@@ -297,7 +307,22 @@ A step whose predicate has not held within its time fails."
          (lambda () (and (at-top-level-prompt-p listener)
                          (not (restarts-panel-visible-p listener))))
          nil)
-   (list :hold nil nil)))
+   (list :hold nil nil)
+   ;; A form that never returns, stopped.  Until asdf-ios-app trapped ECL's
+   ;; interrupt signal, the interrupt was lost and this was there until the app
+   ;; was killed.
+   (list "a form that never returns" (lambda () (at-top-level-prompt-p listener))
+         (lambda () (type-line listener "(loop)")))
+   (list :hold nil nil)
+   (list "is still running" (lambda () (not (at-top-level-prompt-p listener)))
+         (lambda () (abort-evaluation listener)))
+   (list "and Stop gets the prompt back"
+         (lambda ()
+           (let* ((text (self-test-text listener))
+                  (from (search "(loop)" text :from-end t)))
+             (and from (search "; Aborted." text :start2 from)
+                  (at-top-level-prompt-p listener))))
+         nil)))
 
 (defun start-self-test (listener hold)
   (setf *self-test* (make-self-test listener hold (build-self-test-steps listener)))
