@@ -1,6 +1,7 @@
 # Lisp Listener
 
-A Lisp Listener in a native Cocoa window, for SBCL on macOS.
+A Lisp Listener in a native window: AppKit and SBCL on macOS, UIKit and ECL on
+iOS.
 
 Not a REPL in a terminal and not an editor with a REPL pane: a window you type
 forms into, with the values, the output and the debugger coming back in the
@@ -196,6 +197,37 @@ LISP_LISTENER_SELFTEST=/tmp/listener.png \
 It evaluates `(+ 1 2)`, waits for the value to appear in the transcript — with
 a bound, rather than sleeping and hoping — writes the window to that PNG, and
 quits. The result goes to the bundle's log.
+
+## On iOS
+
+The same listener runs on an iPhone or an iPad, on
+[ECL](https://ecl.common-lisp.dev/) rather than SBCL, built by
+[lispnik/asdf-ios-app](https://github.com/lispnik/asdf-ios-app). One core, two
+front ends: everything that is not a view -- the reader, the evaluator, the
+debugger, paredit, indentation, completion, the history -- is the same code.
+
+```sh
+make ios-toolchain  # once: asdf-ios-app builds the host and iOS ECLs (~10 min)
+make ios            # => build/iphonesimulator/Lisp Listener.app
+make run-ios        # build, install and launch in the booted simulator
+```
+
+The transcript is a `UITextView`. Above the on-screen keyboard is a bar of the
+keys a phone keyboard lacks -- Tab, Esc, ↑ and ↓, Hist, Clear and Stop -- and with a hardware
+keyboard the same keys work as they do on the Mac: Tab completes, ↑ and ↓ walk
+the history, Option-Return indents a new line, ⌘. stops a form, ⌘K clears,
+⌘R searches the history.
+
+An error brings up the restarts as a **sheet**: each restart's report, its
+number and name under it, and the frames below. Tap a row, or press ⌘ and its
+number. A restart that wants a value asks for it in the sheet, and Cancel
+returns to the top level.
+
+The app checks itself: `SIMCTL_CHILD_LISP_LISTENER_SELF_TEST=4 xcrun simctl
+launch <device> org.lispnik.lisp-listener` drives a session through typing,
+paredit, completion, the history, an error, the sheet, a value and a form that
+never returns, holding four seconds on each screen worth a look, and writes
+`selftest: PASS` to `Documents/console.log` in the app's container.
 
 ## How it works
 

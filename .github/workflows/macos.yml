@@ -71,6 +71,9 @@ jobs:
     # server" -- no logs, no failing check, nothing to tell a hung test from a
     # sick machine.
     timeout-minutes: 45
+    # For the release step alone: a version tag attaches the built app.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -246,6 +249,31 @@ jobs:
           grep -q "selftest: (+ 1 2) => 3" "$MACOS_APP_LOG" \
             || { echo "::error::the bundled listener did not evaluate (+ 1 2)" >&2; exit 1; }
 
+      - name: Attach the app to the release
+        # On a version tag, the bundle this job just built and ran is the
+        # download: zipped with ditto, which keeps the signature and the
+        # bundle's symlinks, one per architecture.  Both legs attach to the one
+        # release, so creating it may find it already made by the other.
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: sbcl-macos
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -eux
+          zip="$RUNNER_TEMP/Lisp-Listener-$TAG-macOS-$ARCH.zip"
+          ditto -c -k --keepParent "build/Lisp Listener.app" "$zip"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Lisp Listener $TAG" --notes "$(cat <<'NOTES'
+          Lisp Listener for macOS, built by CI from this tag: one zip for Apple silicon (arm64), one for Intel (x86-64). Each is a complete app, with its SBCL (built --with-sb-safepoint) inside; nothing else is needed.
+
+          The app is signed ad hoc, not by an identified developer, so macOS stops it the first time. Unzip it, move it to Applications, and either right-click it and choose Open, or run:
+
+              xattr -dr com.apple.quarantine "/Applications/Lisp Listener.app"
+          NOTES
+          )" || gh release view "$TAG" >/dev/null
+          gh release upload "$TAG" "$zip" --clobber
+
       - name: The ocicl-only path, with no sibling checkouts
         # The README now tells a newcomer that `ocicl setup && ocicl install' is
         # the whole of it -- no objc checkout, no asdf-macos-app checkout.  Every
@@ -316,25 +344,6 @@ jobs:
           name: debugger-test-${{ matrix.arch }}
           path: ${{ runner.temp }}/debugger-test/*.png
           if-no-files-found: ignore
-
-      - name: Make the demo video
-        # On request only -- Run workflow, in the Actions tab -- because a
-        # runner has neither ffmpeg nor ImageMagick, and installing them would
-        # put minutes on every push for a video nobody asked for.
-        if: github.event_name == 'workflow_dispatch' && matrix.arch == 'arm64'
-        working-directory: sbcl-macos
-        run: |
-          set -eux
-          brew install ffmpeg imagemagick
-          perl -e 'alarm shift; exec @ARGV' 1200 make demo SBCL="$SBCL_SAFEPOINT"
-
-      - name: Keep the demo video
-        if: github.event_name == 'workflow_dispatch' && matrix.arch == 'arm64'
-        uses: actions/upload-artifact@v7
-        with:
-          name: demo
-          path: sbcl-macos/build/demo/lisp-listener-demo.mp4
-          if-no-files-found: error
 
       - name: Take the screenshots
         # arm64 only: the pictures are for the README, and two of the same thing
@@ -416,4 +425,27 @@ jobs:
         with:
           name: screenshots
           path: ${{ runner.temp }}/screenshots/*.png
+          if-no-files-found: error
+
+      - name: Make the demo video
+        # Last in the job, so a failure here costs the video and nothing else.
+        # On request only -- Run workflow, in the Actions tab -- because a
+        # runner has neither ffmpeg nor ImageMagick, and installing them would
+        # put minutes on every push for a video nobody asked for.
+        if: github.event_name == 'workflow_dispatch' && matrix.arch == 'arm64'
+        working-directory: sbcl-macos
+        run: |
+          set -eux
+          # ffmpeg-full: Homebrew's plain ffmpeg has no libass, so no
+          # subtitles filter, and the captions are the point.
+          brew install ffmpeg-full imagemagick
+          export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+          perl -e 'alarm shift; exec @ARGV' 1200 make demo SBCL="$SBCL_SAFEPOINT"
+
+      - name: Keep the demo video
+        if: github.event_name == 'workflow_dispatch' && matrix.arch == 'arm64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: demo
+          path: sbcl-macos/build/demo/lisp-listener-demo.mp4
           if-no-files-found: error

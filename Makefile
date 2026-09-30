@@ -5,7 +5,7 @@
 
 SBCL ?= sbcl
 
-.PHONY: deps check syntax-check compile-check test test-ecl run app demo \
+.PHONY: deps check syntax-check compile-check test test-ecl run app demo ios-demo \
         ios-toolchain ios run-ios clean
 
 ECL ?= ecl
@@ -94,6 +94,12 @@ run-ios:
 	    --eval '(asdf:load-system "asdf-ios-app")' \
 	    --eval '(princ (asdf-ios-app:run-in-simulator "lisp-listener-ios"))' \
 	    --eval '(ext:quit 0)'
+
+## The iOS app's self-test, recorded from the booted simulator and captioned
+## step by step: build/ios-demo/lisp-listener-ios-demo.mp4.  Run `make run-ios'
+## first, so the simulator has the current app.
+ios-demo:
+	tools/ios-demo.sh build/ios-demo
 
 clean:
 	rm -rf build
