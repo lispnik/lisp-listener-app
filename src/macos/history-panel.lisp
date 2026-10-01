@@ -68,8 +68,8 @@
 search field.  True when there was a row to go to.  Thread 1.
 
 Once there the list keeps the keys a list has -- the arrows move the
-selection -- and the sheet's buttons keep theirs: Return is Insert, Escape is
-Cancel."
+selection, and ↑ on the top row goes back to the field -- and the sheet's
+buttons keep theirs: Return is Insert, Escape is Cancel."
   (let ((panel (listener-history-panel listener))
         (table (listener-history-table listener)))
     (when (and panel table (not (cffi:null-pointer-p table))
@@ -79,6 +79,45 @@ Cancel."
       (objc:invoke table "scrollRowToVisible:" (objc:invoke table "selectedRow"))
       (objc:invoke panel "makeFirstResponder:" table)
       t)))
+
+(defun focus-history-search (listener)
+  "Give the search field the keyboard back: the way up from the top of the
+list.  True when there was a field to go to.  Thread 1."
+  (let ((panel (listener-history-panel listener)))
+    (when (live-pointer-p panel)
+      (let ((field (objc:invoke panel "initialFirstResponder")))
+        (when (live-pointer-p field)
+          (objc:invoke panel "makeFirstResponder:" field)
+          t)))))
+
+;;; The list is a table of its own class for one key.  ↑ on the top row has
+;;; nowhere to go in a table, and here it goes back up into the search field:
+;;; the way in was ↓, and the way out should be the key opposite.  A table
+;;; takes its arrows in -keyDown: itself and offers them to no delegate, so
+;;; this is the one place the key can be seen; every other key is super's.
+(objc:define-objc-class history-table-view ()
+  ()
+  (:objc-class-name "LispListenerHistoryTable")
+  (:objc-superclass-name "NSTableView"))
+
+(defun history-table-leaves-upward-p (table event)
+  "Whether EVENT, a key pressed in TABLE, is ↑ with the top row selected (or
+none), so that the keyboard should go back to the search field."
+  (let ((characters (objc:ns-string-to-string
+                     (objc:invoke event "charactersIgnoringModifiers"))))
+    (and (plusp (length characters))
+         (eq :up (canvas-key-for-character (char characters 0)))
+         (<= (objc:invoke table "selectedRow") 0))))
+
+(objc:define-objc-method ("keyDown:" :void)
+    ((self history-table-view pointer) (event objc:objc-object-pointer))
+  (unless (handler-case
+              (and (history-table-leaves-upward-p pointer event)
+                   (focus-history-search
+                    (find pointer *listeners* :key #'listener-history-table
+                                              :test #'same-objc-object-p)))
+            (error (condition) (note "history keyDown: ~a" condition) nil))
+    (objc:invoke (objc:current-super) "keyDown:" event)))
 
 ;;; ↓ in the search field goes down into the list.  The field editor offers
 ;;; every key it would act on to the field's delegate first, as a selector:
@@ -153,10 +192,18 @@ MAKE-ROW-VIEW in src/macos/restarts-panel.lisp."
                         (- width (* 2 *history-panel-margin*)) height))
          (scroll (objc:invoke (objc:invoke "NSScrollView" "alloc")
                               "initWithFrame:" frame))
-         (table (objc:invoke (objc:invoke "NSTableView" "alloc")
-                             "initWithFrame:" frame))
+         ;; The Lisp object is held by the listener for as long as the table
+         ;; is; the next list replaces it.
+         (object (make-instance 'history-table-view
+                                :init-function
+                                (lambda (pointer &rest initargs)
+                                  (declare (ignore initargs))
+                                  (objc:invoke pointer "initWithFrame:" frame))
+                                :allow-other-keys t))
+         (table (objc:objc-object-pointer object))
          (column (objc:invoke (objc:invoke "NSTableColumn" "alloc")
                               "initWithIdentifier:" "history")))
+    (setf (getf (listener-retained listener) :history-table) object)
     (objc:invoke column "setWidth:" (- width (* 2 *history-panel-margin*) 24d0))
     (objc:invoke table "addTableColumn:" column)
     (objc:release column)
@@ -175,8 +222,6 @@ MAKE-ROW-VIEW in src/macos/restarts-panel.lisp."
     (objc:invoke table "reloadData")
     (select-restart-row table 0)
     (setf (listener-history-table listener) table)
-    ;; -setDocumentView: retains it; the +1 from -alloc is ours to drop.
-    (objc:release table)
     scroll))
 
 (defun build-history-panel (listener)

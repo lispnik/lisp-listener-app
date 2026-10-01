@@ -192,6 +192,11 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 show-history-popup hide-history-popup history-popup-visible-p
                 ;; Which listener a menu item or a key means.
                 current-listener
+                ;; The canvas (src/canvas.lisp): :APPKIT or :UIKIT, for the
+                ;; painter; put it on screen, with the keyboard or without;
+                ;; take it down; ask; and repaint it, showing it if need be.
+                canvas-toolkit show-canvas hide-canvas canvas-visible-p
+                redisplay-canvas
                 ;; LISTENER-TEXT-VIEW's slot accessors.  The class is the front
                 ;; end's -- its superclass is NSTextView or UITextView -- and
                 ;; the transcript in the core reads and writes its slots.

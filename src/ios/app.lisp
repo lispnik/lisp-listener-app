@@ -18,6 +18,8 @@ target the listener thread hops to, and only then the thread."
   (setf *log* *standard-output*)
   (objc:ensure-objc-initialized)
   (reset-transcript-attributes)
+  ;; The canvas's names, in CL-USER before the init file, which may draw.
+  (install-user-vocabulary)
   (load-init-file)
   (let ((listener (make-listener))
         (restarts (make-instance 'restarts-controller))
@@ -45,6 +47,7 @@ target the listener thread hops to, and only then the thread."
       (register-listener listener)
       (setf *listener* listener
             *main-thread-target* pointer)
+      (install-open-url-hook)
       (warm-selectors listener)
       (start-listener-thread listener)
       (report-init-file listener)
@@ -59,6 +62,75 @@ target the listener thread hops to, and only then the thread."
 (defun current-listener ()
   "The one listener there is."
   (or *listener* (first *listeners*)))
+
+;;; A file from Files -----------------------------------------------------------
+;;;
+;;; The bundle declares .lisp as a document type (lisp-listener-ios.asd), so
+;;; Files and a share sheet offer the listener for one.  asdf-ios-app's scene
+;;; delegate hands the URL to IOS-APP-RUNTIME:*OPEN-URL-HOOK*, whether it
+;;; launched the app or found it running, and this is the hook: the file is
+;;; loaded by typing (load "...") at the prompt, as File > Open... does on the
+;;; Mac.
+
+(defun open-url (url-string)
+  "Load the Lisp file URL-STRING names.  Thread 1.
+
+The URL is security scoped and this is the only moment the file can be read,
+while the load itself happens later on the listener thread: so a file from
+outside the app's own documents is copied in first (IMPORT-OPENED-FILE)."
+  (let ((listener (current-listener))
+        (url (objc:invoke "NSURL" "URLWithString:" url-string)))
+    (cond ((not (and listener (live-pointer-p url) (objc:invoke-bool url "isFileURL")))
+           (note "open: nothing to do with ~a" url-string)
+           nil)
+          (t
+           (let ((path (objc:ns-string-to-string (objc:invoke url "path"))))
+             (cond ((loadable-file-p path)
+                    ;; Copied NOW, whenever it is loaded.
+                    (load-when-prompted
+                     listener (list (import-opened-file path (history-directory))))
+                    t)
+                   (t (note "open: ~a is not a Lisp file" path)
+                      nil)))))))
+
+(defun first-prompt-shown-p (listener)
+  "Whether LISTENER's first prompt is on screen: printed by its thread, and
+flushed into the view."
+  (let ((prompt (listener-prompt listener))
+        (pointer (listener-view listener)))
+    (and (listener-package listener)
+         (or (null prompt)                ; already past it, and evaluating
+             (let ((length (transcript-length pointer)))
+               (and (>= length (length prompt))
+                    (search prompt (transcript-substring pointer 0 length)
+                            :from-end t)))))))
+
+(defun load-when-prompted (listener paths)
+  "Load PATHS at LISTENER's prompt -- once it has one.
+
+A file that LAUNCHED the app arrives the moment the entry point returns, when
+the listener thread has printed half a banner and no prompt: typed then, the
+load was spliced into the middle of `ECL 26.5.5'.  So at startup it waits, on a
+timer, for the first prompt to be on screen (or for five seconds, whichever
+is first: a file not loaded is worse than one loaded untidily)."
+  (if (first-prompt-shown-p listener)
+      (load-files-into-listener listener paths)
+      (let ((tries 0))
+        (uikit:after-every
+         0.1d0
+         (lambda (timer)
+           (when (or (first-prompt-shown-p listener) (> (incf tries) 50))
+             (objc:invoke timer "invalidate")
+             (load-files-into-listener listener paths)))))))
+
+(defun install-open-url-hook ()
+  "Tell asdf-ios-app's runtime where URLs go.  By name, at run time: the
+package is the app's, and is not there when this file is compiled off a Mac."
+  (let* ((package (find-package "IOS-APP-RUNTIME"))
+         (hook (and package (find-symbol "*OPEN-URL-HOOK*" package))))
+    (if hook
+        (setf (symbol-value hook) 'open-url)
+        (note "open: this asdf-ios-app has no *OPEN-URL-HOOK*; files cannot be opened"))))
 
 ;;; The self-test -------------------------------------------------------------
 ;;;
@@ -308,6 +380,90 @@ A step whose predicate has not held within its time fails."
                          (not (restarts-panel-visible-p listener))))
          nil)
    (list :hold nil nil)
+   ;; The examples and the canvas.  Try lists them in the history's sheet; a
+   ;; chosen one is put at the prompt, and Return runs it.
+   (list "Try lists the examples" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (unless (open-examples-popup listener)
+             (error "the list would not open"))
+           (unless (eql (length *examples*) (history-row-count listener))
+             (error "~a rows, wanted ~d" (history-row-count listener) (length *examples*)))
+           (type-history-query "spiral" listener)
+           (unless (eql 1 (history-row-count listener))
+             (error "~a rows after narrowing, wanted 1" (history-row-count listener)))))
+   (list "and a chosen one is put at the prompt" (constantly t)
+         (lambda ()
+           (let ((view (listener-view-object listener))
+                 (pointer (listener-view listener)))
+             (choose-history-row listener 0)
+             (unless (string= (pending-input view pointer) "(example \"spiral\")")
+               (error "chose ~s" (pending-input view pointer))))))
+   (list "Return runs it" (lambda () (not (history-popup-visible-p listener)))
+         (lambda ()
+           (submit-input (listener-view-object listener) (listener-view listener))))
+   (list "the canvas comes up, painted"
+         (lambda () (and (canvas-visible-p) (plusp *canvas-paints*)
+                         (at-top-level-prompt-p listener)))
+         (lambda ()
+           (unless (= 140 (length (canvas-contents)))
+             (error "~d shapes on it, wanted 140" (length (canvas-contents))))))
+   (list :hold nil nil)
+   (list "its arrows are what (key) answers" (constantly t)
+         (lambda ()
+           (loop while (canvas:key))
+           (unless (press-canvas-key :left) (error "there is no left arrow"))
+           (let ((key (canvas:key)))
+             (unless (eq key :left) (error "(key) answered ~s" key)))))
+   ;; An error while the canvas is up: the restarts go over it, not nowhere.
+   (list "an error with the canvas up" (constantly t)
+         (lambda () (type-line listener "(circle 0 0 :big)")))
+   (list "puts the restarts over it" (lambda () (restarts-panel-visible-p listener)) nil)
+   (list "Cancel takes them down" (constantly t)
+         (lambda ()
+           (unless (cancel-to-top-level listener)
+             (error "no top-level restart on offer"))))
+   (list "and leaves the canvas"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (not (restarts-panel-visible-p listener))
+                         (canvas-visible-p)))
+         nil)
+   ;; Snake, left to itself: it runs into the wall after ten squares.
+   (list "snake is played" (constantly t)
+         (lambda () (type-line listener "(example \"snake\")")))
+   (list "to the end of the game"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (find :text (canvas-contents) :key #'first)))
+         nil)
+   (list :hold nil nil)
+   (list "Done puts the canvas away" (constantly t)
+         (lambda ()
+           (let ((done (cdr (assoc :done *canvas-pad*))))
+             (unless (live-pointer-p done) (error "there is no Done button"))
+             (objc:invoke done "sendActionsForControlEvents:" 64))))
+   (list "and it is gone" (lambda () (not (canvas-visible-p))) nil)
+   ;; A file from Files, as the scene delegate delivers one: a URL, to the
+   ;; runtime's hook.  A space in the name, which the URL has to carry encoded.
+   (list "a Lisp file is handed over by the system"
+         (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (let* ((path (concatenate 'string (string-right-trim "/" (getenv "TMPDIR"))
+                                     "/handed over.lisp"))
+                  (deliver (find-symbol "DELIVER-URL" "IOS-APP-RUNTIME")))
+             (with-open-file (out path :direction :output :if-exists :supersede)
+               (write-string "(defun cl-user::handed-over () :from-files)" out))
+             (unless (and deliver
+                          (funcall deliver
+                                   (objc:ns-string-to-string
+                                    (objc:invoke (objc:invoke "NSURL" "fileURLWithPath:" path)
+                                                 "absoluteString"))))
+               (error "the runtime had nowhere to deliver it")))))
+   (list "it is copied in and loaded at the prompt"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (search "Opened/handed over.lisp\")" (self-test-text listener))))
+         (lambda () (type-line listener "(cl-user::handed-over)")))
+   (list "and what it defined is there"
+         (lambda () (search ":FROM-FILES" (self-test-text listener)))
+         nil)
    ;; A form that never returns, stopped.  Until asdf-ios-app trapped ECL's
    ;; interrupt signal, the interrupt was lost and this was there until the app
    ;; was killed.

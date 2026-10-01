@@ -107,6 +107,33 @@ with NIL and builds a fresh one.")
   (handler-case (clear-transcript (current-listener))
     (error (condition) (note "listenerClearTranscript: ~a" condition))))
 
+(objc:define-objc-method ("listenerExample:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  ;; The item says which: its title is the example's.  Typed at the prompt, not
+  ;; run here -- thread 1 never evaluates, and the transcript should show it.
+  (handler-case
+      (let* ((title (objc:ns-string-to-string (objc:invoke sender "title")))
+             (entry (find title *examples* :key #'example-title :test #'string=)))
+        (when entry
+          (run-example-in-listener (current-listener) (example-name entry))))
+    (error (condition) (note "listenerExample: ~a" condition))))
+
+(objc:define-objc-method ("listenerListExamples:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  (handler-case
+      (let ((listener (current-listener)))
+        (when listener
+          (type-into-listener listener "(examples)" :record t)))
+    (error (condition) (note "listenerListExamples: ~a" condition))))
+
+(objc:define-objc-method ("listenerShowCanvas:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  (handler-case (progn (show-canvas :keyboard t)
+                       (objc:invoke (canvas-view-pointer) "setNeedsDisplay:" t))
+    (error (condition) (note "listenerShowCanvas: ~a" condition))))
+
 (objc:define-objc-method ("listenerSelfTest:" :void)
     ((self listener-controller) (timer objc:objc-object-pointer))
   (declare (ignorable timer))
@@ -182,7 +209,9 @@ try to reach thread 1 before there is a view to deliver the hop to."
     (reset-transcript-attributes)
     ;; Before the thread starts, so that what it sets -- the keymap, the font --
     ;; is in force from the banner onwards.  Only for the first listener: a
-    ;; second window must not run somebody's init file again.
+    ;; second window must not run somebody's init file again.  The canvas's
+    ;; names go into CL-USER first, so that an init file may draw.
+    (install-user-vocabulary)
     (load-init-file))
   (objc.runloop:shared-application :activation-policy activation-policy)
   (let ((listener (make-listener))
@@ -413,6 +442,7 @@ like a hang and is not one."
         (ignore-errors (objc:invoke (listener-window other) "orderOut:" nil))
         (ignore-errors (unregister-listener other)))
       (ignore-errors (retarget-main-thread))
+      (ignore-errors (hide-canvas))
       (ignore-errors (queue-set-eof (listener-input listener)))
       (ignore-errors (abort-evaluation listener))
       (ignore-errors

@@ -35,8 +35,30 @@
                             ((uiop:getenv "IOS_SIGNING_IDENTITY") '(:simulator :device))
                             (t '(:simulator)))
   :get-task-allow #.(not (uiop:getenv "LISP_LISTENER_DISTRIBUTION"))
-  ;; Export compliance, answered: the listener encrypts nothing.
-  :bundle-info-plist (("ITSAppUsesNonExemptEncryption" . :false))
+  ;; Lisp source is this app's document: Files and a share sheet offer the
+  ;; listener for a .lisp file, and opening one loads it (OPEN-URL).  The type
+  ;; is declared below because the system has none for Lisp.
+  :bundle-document-types
+  ((:dict ("CFBundleTypeName" . "Lisp source")
+          ("CFBundleTypeRole" . "Editor")
+          ("LSHandlerRank" . "Owner")
+          ("LSItemContentTypes" . (:array "org.lispnik.lisp-source"))))
+  :bundle-info-plist
+  (;; Export compliance, answered: the listener encrypts nothing.
+   ("ITSAppUsesNonExemptEncryption" . :false)
+   ;; These two together put the app's Documents in the Files app, under On
+   ;; My iPhone: a file dropped there is one (load "name.lisp") away, and the
+   ;; history and console.log can be got at.  Opening in place also means a
+   ;; file from elsewhere arrives as itself, not as a copy in an Inbox.
+   ("UIFileSharingEnabled" . :true)
+   ("LSSupportsOpeningDocumentsInPlace" . :true)
+   ("UTExportedTypeDeclarations"
+    . (:array (:dict ("UTTypeIdentifier" . "org.lispnik.lisp-source")
+                     ("UTTypeDescription" . "Lisp source")
+                     ("UTTypeConformsTo" . (:array "public.source-code" "public.plain-text"))
+                     ("UTTypeTagSpecification"
+                      . (:dict ("public.filename-extension"
+                                . (:array "lisp" "lsp" "cl" "asd"))))))))
   ;; All four: an app that runs on an iPad must, for multitasking, and App
   ;; Store Connect refuses a bundle without upside-down portrait (90474).
   :bundle-orientations (:portrait :portrait-upside-down :landscape-left :landscape-right)

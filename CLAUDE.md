@@ -10,8 +10,9 @@ front ends over one core**: AppKit (`NSTextView`) for SBCL on macOS, and UIKit
 (`UITextView`) for ECL on iOS. Every Objective-C class in it is defined from Lisp through
 [lispnik/objc](https://github.com/lispnik/objc); the Mac bundle is built by
 [lispnik/asdf-macos-app](https://github.com/lispnik/asdf-macos-app) and the iOS
-app by [lispnik/asdf-ios-app](https://github.com/lispnik/asdf-ios-app). One package,
-`LISP-LISTENER`; `OBJC` is deliberately not `:USE`d, because it exports `INVOKE`,
+app by [lispnik/asdf-ios-app](https://github.com/lispnik/asdf-ios-app). One package
+of code, `LISP-LISTENER` (and `CANVAS`, which holds only the names a person
+types to draw); `OBJC` is deliberately not `:USE`d, because it exports `INVOKE`,
 `RELEASE`, `RETAIN` and `DESCRIPTION` and this is the program where an accidental
 capture of one of those is hardest to see.
 
@@ -44,7 +45,7 @@ The iOS targets run under **ECL**, not SBCL: asdf-ios-app is ECL code and
 cross-compiles with the ECL `ios-toolchain` built. The iOS app has a self-test:
 `SIMCTL_CHILD_LISP_LISTENER_SELF_TEST=6 xcrun simctl launch <device>
 org.lispnik.lisp-listener` drives a session, Tab, an error, the restarts sheet
-and Cancel, holding N seconds on the screens worth photographing, and writes
+and Cancel, an example, the canvas and a game of snake, holding N seconds on the screens worth photographing, and writes
 `selftest: PASS` to `Documents/console.log` in the app's data container.
 Take `xcrun simctl io` screenshots **in the same shell command as the launch**:
 anything slower misses the holds.
@@ -69,6 +70,9 @@ works in a fresh clone before `make deps`.
 real gray streams, the real reader, evaluator, printer and debugger — and drives
 it through a session, an error, `use-value`, `store-value`, `y-or-n-p` and an
 abort, reading the transcript back and asserting on it. Only Cocoa is hollow.
+
+It draws on the canvas and runs **every example** to its end (`case-canvas`,
+`case-examples`): drawing only ever makes a list, so there is nothing to stub.
 
 It also runs **two listeners at once** (`case-two-listeners`), which is the half
 of New Listener that is not the window: two threads, two queues, two
@@ -132,13 +136,18 @@ order is load-bearing**:
 
 - `lisp-listener/core` — `src/`: `package impl main-thread queue listener history
   sexp paredit keymap indent transcript completion paren-highlight paredit-view
-  history-search streams config restarts files repl`. No toolkit; SBCL and ECL.
+  history-search streams config restarts files canvas examples repl`. No
+  toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
-  history-panel screenshot debugger-test demo app`. The name it always had.
-- `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet app`.
+  history-panel canvas-window screenshot debugger-test demo app`. The name it
+  always had.
+- `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet
+  history-sheet canvas-sheet app`.
 
 `tools/compile-check.lisp` and `tools/headless-test.lisp` each carry the same
-lists by hand; a new file has to be added in all three places.
+lists by hand; a new file has to be added in all three places. The core also
+names `examples/*.lisp` as static files ahead of `examples`, which is what
+makes ASDF compile it again when one changes.
 
 **The seam is `src/impl.lisp`.** It is the only file in `src/` with `#+sbcl` or
 `#+ecl` (debugger hook, backtrace, restart internals, exit, getenv). The one
@@ -146,7 +155,9 @@ exception is the Gray streams package, which `package.lisp` names with a local
 nickname, `gray-streams`. `impl.lisp` also declaims what each front end must
 define: `transcript-color`, `transcript-font`, `main-thread-run-loop-modes`,
 `show-restarts-panel`, `hide-restarts-panel`, `restarts-panel-visible-p`,
-`current-listener`, and the class `listener-text-view`, with the same slots on
+`current-listener`, the canvas's five (`canvas-toolkit`, `show-canvas`,
+`hide-canvas`, `canvas-visible-p`, `redisplay-canvas`), and the class
+`listener-text-view`, with the same slots on
 both. The core only ever touches that class through `-textStorage`,
 `-selectedRange`, `-scrollRangeToVisible:` and `-typingAttributes`, which
 NSTextView and UITextView share.
@@ -187,6 +198,7 @@ NSTextView and UITextView share.
   rebinding survives a launch. A broken one is reported, never fatal.
 - `src/history-search.lisp` — the history picker: ⌘R lists everything submitted,
   typing narrows it (every whitespace-separated term must appear, ignoring case),
+  ↓ goes from the field into the list and ↑ from its top row back,
   and a chosen row goes into the input region **unsubmitted**. The filtering is
   pure; the list is `src/macos/history-panel.lisp` (a **sheet** on the listener
   window -- an `NSSearchField` over an `NSTableView`, begun with
@@ -208,6 +220,25 @@ NSTextView and UITextView share.
   `save-transcript`. The panels are `src/macos/app.lisp`'s, the drop is the
   view's `-performDragOperation:`, which leaves anything not Lisp to the text
   view.
+- `src/canvas.lisp` — a canvas to draw on from the prompt, and the `CANVAS`
+  package's functions (`line`, `circle`, `forward`, `frame`, `key`...), which
+  `install-user-vocabulary` imports into `CL-USER` when the first listener
+  starts. 200 units square, origin in the middle, y up. **Drawing is on the
+  listener thread and only pushes onto a display list**; thread 1's
+  `-drawRect:` paints it, after one coalesced hop that declines with no
+  `*main-thread-target*` -- the same seam as `schedule-flush`, so `make test`
+  draws and reads the list back. `(frame ...)` swaps in a whole picture, which
+  is animation. The **painter is here, for both toolkits** (`paint-canvas`):
+  both views are flipped, `canvas-device-ops` turns y over and gathers
+  neighbouring lines into one path, and `canvas-toolkit` picks between the
+  three selectors NSBezierPath and UIBezierPath disagree on.
+- `src/examples.lisp` — `(examples)`, `(example "snake")`,
+  `(example-source "snake")`. The six programs are `examples/*.lisp`, **read
+  into the image as strings when this file is compiled** (`embedded-examples`):
+  an app has no source tree beside it. Run by reading and evaluating each form
+  in `CL-USER` on the listener thread; the Examples menu and the Try key only
+  type `(example "…")` at the prompt. A new one is a file, a name in
+  `*example-names*`, and a static file in `lisp-listener.asd`.
 - `src/repl.lisp` — the listener thread, the debugger and the backtrace. Each
   frame is captured with its locals (`backtrace-frame`), printed on the listener
   thread while the stack exists; SBCL only, since ECL's frame stack keeps
@@ -240,6 +271,11 @@ NSTextView and UITextView share.
   whatever was half-typed is put back, and the history is not touched. The
   field's room comes from the transcript: the divider moves up while it is
   open. Frames and locals carry their full text as a tooltip.
+- `src/macos/canvas-window.lisp` — the canvas as a window: one for the
+  application, made on first use beside the front listener, closed with the
+  last listener. Drawing brings it forward but **leaves the keyboard at the
+  prompt**; `(show)` is what makes it key, and a game calls it. `-keyDown:`
+  feeds `(key)`.
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
   produces `doc/screenshots/`, on a CI runner, on every push.
 - `src/macos/demo.lisp` — `LISP_LISTENER_DEMO=<dir>` plays a scripted session a
@@ -250,8 +286,9 @@ NSTextView and UITextView share.
 - `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the
   docked debugger through what a person does with it and checks each step:
   docking, frames and locals, the keys, the divider, the value field, Escape,
-  a second level, the history sheet, a second listener beside the first, and
-  File ▸ Open…, a dropped file and Save Transcript….
+  a second level, the history sheet, a second listener beside the first,
+  File ▸ Open…, a dropped file and Save Transcript…, and the Examples menu
+  and the canvas.
   Exits 0 only if every check held; `macos.yml` runs it on
   both architectures. **Everything in the pane is AppKit, so the headless test
   reaches none of it**; every bug in the pane's first versions was found by
@@ -268,7 +305,16 @@ NSTextView and UITextView share.
   detent and draggable to full height. A restart that asks for a value asks
   in a `UITextField` under the heading, hidden until then; Return sends
   `1 42`, as on the Mac. A second section lists the frames, by name only.
-- `src/ios/app.lisp` — `ios-start`, and the self-test.
+- `src/ios/canvas-sheet.lisp` — the canvas as a sheet at the medium detent,
+  with Done and a row of arrow buttons that are the keys `(key)` answers.
+  Buttons, not swipes: a sheet already has a meaning for a vertical drag.
+  Presented **without animation**, so that the restarts can go over it at once.
+- `src/ios/app.lisp` — `ios-start`, the self-test, and `open-url`: `.lisp` is
+  the app's document type (`lisp-listener-ios.asd`), asdf-ios-app's scene
+  delegate hands a URL from Files to `ios-app-runtime:*open-url-hook*`, and the
+  hook copies the file in if it is not the app's own (`import-opened-file`, in
+  `src/files.lisp`) and types `(load "…")`. `UIFileSharingEnabled` with
+  `LSSupportsOpeningDocumentsInPlace` puts the app's Documents in the Files app.
 
 `lisp-alien.png` is the icon's source art, and `res/` is what the two builders
 take: `res/icon.png`, the alien inset in a rounded rectangle, which
@@ -471,6 +517,55 @@ Each of these is a bug that actually happened here.
   panel, and since showing hides first, it emptied the list
   `open-history-popup` had just filled: the table came up with nothing in it.
   Stale rows are harmless — the next open replaces them.
+
+- **An example changed is not an app rebuilt.** The examples are strings read
+  in when `src/examples.lisp` is compiled. ASDF is told -- they are static
+  files ahead of it in `lisp-listener.asd` -- and SBCL's builds follow; but
+  asdf-ios-app's cross-compile goes by the `.lisp` files alone, and the iOS
+  self-test found yesterday's spiral in today's app. The Makefile's
+  `src/examples.lisp: examples/*.lisp` rule touches the file, and every target
+  that builds depends on it.
+
+- **A file that launches the app arrives before the first prompt.** The scene
+  delegate delivers a launch URL the moment `ios-start` returns, when the
+  listener thread has printed half a banner: typed then, the load came out as
+  `ECL(load "…") 26.5.5`. `load-when-prompted` waits on a timer for the first
+  prompt to be on screen. And **the copy must be made in the hook**, not then:
+  a document's URL is security scoped, readable only until the hook returns.
+
+- **A table offers its arrow keys to nobody.** NSTableView handles them in
+  `-keyDown:` itself -- no delegate, no `doCommandBySelector:` -- so ↑ from the
+  top of the history list back to the search field needed a subclass,
+  `history-table-view`, whose `-keyDown:` takes that one case and gives every
+  other key to super.
+
+- **A table's data source must never answer a nil cell, even for a row that
+  has gone.** The restarts are withdrawn the moment one is chosen, and the
+  sheet is still animating away with its table on screen. An iPhone does not
+  ask again; an iPad's focus engine walks the table during the dismissal, got
+  nil for a row counted earlier, and UITableView's assertion killed the app.
+  Only the iPad simulator showed it. `make-blank-cell` is the answer for any
+  row the controller no longer has.
+
+- **UIKit presents only from the top of the stack.** Asked to present from a
+  controller that is already presenting, it logs a warning and does nothing: an
+  error in a form that had just drawn, with the canvas's sheet up, would have
+  put no restarts on screen at all. `presenting-controller` walks
+  `presentedViewController` to the top, skipping one that `isBeingDismissed`.
+
+- **A canvas the person closed must stay closed until the next form.** Drawing
+  shows the canvas, and an animation draws sixty times: closed at frame ten it
+  came straight back at frame eleven. `canvas-closed-by-person` sets
+  `*canvas-dismissed*` (and pushes Escape, so a game ends), and the REPL clears
+  it before each evaluation (`canvas-evaluation-begins`), at the top level and
+  at a debugger prompt alike.
+
+- **In a driven run every menu item answers NO to `-isEnabled`.** The process
+  is not the active application, and once the menu bar has been handed a key
+  equivalent in that state its items all read disabled -- while ⌘K goes on
+  being taken. `-performActionForItemAtIndex:` declines a disabled item and
+  says nothing, so the driver's `press-menu-item` sends the item's action to
+  its target itself. It is the driver's condition, not the application's.
 
 - **A character typed beside a tinted paren INHERITS the tint**, because a text
   view takes its typing attributes from the character at the insertion point.

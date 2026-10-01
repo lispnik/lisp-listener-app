@@ -43,6 +43,16 @@
                  (:file "config")
                  (:file "restarts")
                  (:file "files")
+                 (:file "canvas")
+                 ;; Read into the image when "examples" is compiled; named here
+                 ;; so that changing one compiles it again.
+                 (:static-file "hello" :pathname "../examples/hello.lisp")
+                 (:static-file "spiral" :pathname "../examples/spiral.lisp")
+                 (:static-file "rose" :pathname "../examples/rose.lisp")
+                 (:static-file "tree" :pathname "../examples/tree.lisp")
+                 (:static-file "life" :pathname "../examples/life.lisp")
+                 (:static-file "snake" :pathname "../examples/snake.lisp")
+                 (:file "examples")
                  (:file "repl")))))
 
 (defsystem "lisp-listener"
@@ -69,6 +79,7 @@ an SBCL built --with-sb-safepoint; see the README for why."
                  (:file "window")
                  (:file "restarts-panel")
                  (:file "history-panel")
+                 (:file "canvas-window")
                  (:file "screenshot")
                  (:file "debugger-test")
                  (:file "demo")
@@ -87,4 +98,5 @@ an SBCL built --with-sb-safepoint; see the README for why."
                 ((:file "view")
                  (:file "restarts-sheet")
                  (:file "history-sheet")
+                 (:file "canvas-sheet")
                  (:file "app")))))

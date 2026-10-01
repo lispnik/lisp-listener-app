@@ -45,4 +45,27 @@
    #:*restarts-panel-enabled*
    #:*backtrace-enabled*
    #:*backtrace-frames*
-   #:safepoint-build-p))
+   #:safepoint-build-p
+   ;; The examples that ship in the image.
+   #:examples
+   #:example
+   #:example-source))
+
+;;; CANVAS is the other package, and it holds nothing but names: the drawing
+;;; vocabulary a person types at the prompt.  It uses nothing, so that LINE and
+;;; LEFT and KEY cannot collide with anything here; every one of them is defined
+;;; in src/canvas.lisp, from inside LISP-LISTENER, as CANVAS:LINE and so on.
+;;; INSTALL-USER-VOCABULARY imports them into CL-USER when a listener starts.
+(defpackage #:canvas
+  (:use)
+  (:export
+   ;; The canvas itself.
+   #:show #:hide #:clear #:background
+   ;; The pen.
+   #:color #:hue #:pen
+   ;; Shapes.  The canvas runs from -100 to 100 each way, y upwards.
+   #:line #:dot #:circle #:rect #:box #:text #:plot #:curve
+   ;; A turtle.
+   #:forward #:back #:left #:right #:pen-up #:pen-down #:home #:move-to
+   ;; Animation and games.
+   #:frame #:wait #:key))

@@ -102,6 +102,47 @@ is involved: nothing is photographed off the screen.
   and the form you choose goes back at the prompt to edit. The history is kept
   between launches.
 
+### A canvas, and some examples
+
+![A spiral, a tree and a rose curve, each drawn from the prompt](doc/canvas.png)
+
+There is a canvas to draw on. `(circle 0 0 50)` at the prompt opens it — a
+second window on the Mac, a sheet on a phone — and draws a circle in the middle:
+the canvas runs from -100 to 100 each way, with y going up.
+
+```lisp
+(dotimes (i 140)            ; the picture on the left
+  (hue (/ i 140))
+  (forward i)
+  (right 89))
+
+(plot (lambda (x) (* 50 (sin (/ x 10)))))
+```
+
+| | |
+|---|---|
+| shapes | `line` `dot` `circle` `rect` `box` `text`, and `plot` and `curve` for a function |
+| the pen | `color` (`:red`, or three numbers), `hue` for the rainbow, `pen` for the width |
+| a turtle | `forward` `back` `left` `right` `pen-up` `pen-down` `home` `move-to` |
+| animation | `(frame ...)` draws one whole picture in place of the last, and `(wait 0.1)` pauses |
+| games | `(key)` answers the next key pressed in the canvas — `:left`, `:space`, `#\q` — or `nil` |
+| the canvas | `clear` `background` `show` `hide` |
+
+They are ordinary functions in a package called `canvas`, imported into
+`cl-user` when a listener starts, and each has a docstring.
+
+Six short programs come with it, in the **Examples** menu (the **Try** key on a
+phone): a face, the spiral, a rose curve, a tree that is made of smaller trees,
+Conway's Life, and Snake. `(examples)` lists them, `(example "snake")` runs one,
+and `(example-source "snake")` prints it to read — none is longer than a
+screen. Running one leaves what it defined, so after the spiral there is a
+`spiral` to call with an angle of your own: `(spiral 121)`.
+
+Drawing happens on the listener thread and only ever makes a list; thread 1
+paints it. So a drawing that goes wrong lands in the debugger like any other
+error, Interrupt stops an animation, and `make test` runs every example with
+no window anywhere.
+
 ## Requirements
 
 - macOS on arm64 or Intel.
@@ -223,7 +264,7 @@ make run-ios        # build, install and launch in the booted simulator
 ```
 
 The transcript is a `UITextView`. Above the on-screen keyboard is a bar of the
-keys a phone keyboard lacks -- Tab, Esc, ↑ and ↓, Hist, Clear and Stop -- and with a hardware
+keys a phone keyboard lacks -- Tab, Esc, ↑ and ↓, Hist, Try, Clear and Stop -- and with a hardware
 keyboard the same keys work as they do on the Mac: Tab completes, ↑ and ↓ walk
 the history, Option-Return indents a new line, ⌘. stops a form, ⌘K clears,
 ⌘R searches the history.
@@ -233,10 +274,18 @@ number and name under it, and the frames below. Tap a row, or press ⌘ and its
 number. A restart that wants a value asks for it in the sheet, and Cancel
 returns to the top level.
 
+A `.lisp` file in the Files app, or in a share sheet, offers **Lisp Listener**:
+opening it loads it, with the `(load "…")` typed at the prompt as File ▸ Open…
+does on the Mac. The app's own folder is in Files under On My iPhone, so a
+file put there is `(load "name.lisp")` away, and `init.lisp` can be edited.
+
+The canvas is a sheet too, at half height so the transcript stays in view, with
+a row of arrows under it for the keys a game reads. **Try** lists the examples.
+
 The app checks itself: `SIMCTL_CHILD_LISP_LISTENER_SELF_TEST=4 xcrun simctl
 launch <device> org.lispnik.lisp-listener` drives a session through typing,
-paredit, completion, the history, an error, the sheet, a value and a form that
-never returns, holding four seconds on each screen worth a look, and writes
+paredit, completion, the history, an error, the sheet, a value, an example, a
+game of snake and a form that never returns, holding four seconds on each screen worth a look, and writes
 `selftest: PASS` to `Documents/console.log` in the app's container.
 
 ## How it works
@@ -336,7 +385,7 @@ Cocoa. `tools/headless-test.lisp` starts a real listener on those same stubs —
 a real thread, the real gray streams, the real reader, evaluator, printer and
 debugger — and drives it through a session, an error, `use-value`,
 `store-value`, `y-or-n-p` and an abort, reading the transcript back and
-asserting on it. The seam that makes it possible is `schedule-flush`, which
+asserting on it. It draws on the canvas and runs every example, too. The seam that makes it possible is `schedule-flush`, which
 declines to do anything while there is no main thread to flush to, so the
 output simply piles up in the stream where the test can read it.
 

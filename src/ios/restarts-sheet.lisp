@@ -87,12 +87,12 @@
              (frames (getf (controller-views self) :frames)))
         (if (zerop (objc:invoke index-path "section"))
             (let ((restart (and (>= row 0) (< row (length titles)) (nth row titles))))
-              (if restart (make-restart-cell restart) (cffi:null-pointer)))
+              (if restart (make-restart-cell restart) (make-blank-cell)))
             (let ((frame (and (>= row 0) (< row (length frames)) (nth row frames))))
-              (if frame (make-frame-cell frame) (cffi:null-pointer)))))
+              (if frame (make-frame-cell frame) (make-blank-cell)))))
     (error (condition)
       (note "cellForRowAtIndexPath: ~a" condition)
-      (cffi:null-pointer))))
+      (make-blank-cell))))
 
 (objc:define-objc-method ("tableView:didSelectRowAtIndexPath:" :void)
     ((self restarts-controller)
@@ -129,6 +129,17 @@
                     *sheet-row-height*
                     *sheet-frame-row-height*)
     (error () *sheet-row-height*)))
+
+(defun make-blank-cell ()
+  "An empty cell, AUTORELEASED: what the data source answers for a row it no
+longer has.
+
+Never nil.  A table asks for a cell by a row count it took earlier, and a
+sheet on its way out is still a table on screen: on an iPad the focus engine
+walks it during the dismissal, after the restarts have been withdrawn, and a
+nil cell there is an assertion in UITableView that takes the app down."
+  (objc:autorelease (objc:invoke (objc:invoke "UITableViewCell" "alloc")
+                                 "initWithStyle:reuseIdentifier:" 0 "blank")))
 
 (defun make-frame-cell (frame)
   "One frame, AUTORELEASED: its line, small, grey and not selectable."
@@ -365,9 +376,20 @@ Thread 1."
     controller))
 
 (defun presenting-controller (listener)
-  "The controller to present from: the listener view's window's root."
-  (let ((window (objc:invoke (listener-view listener) "window")))
-    (objc:invoke window "rootViewController")))
+  "The controller to present from: whatever is on top, which is the listener
+view's window's root unless something is already up.
+
+UIKit presents from the top of the stack only -- asked to present from a
+controller that is already presenting, it logs a warning and does nothing.  So
+an error in a form that had just drawn, with the canvas's sheet up, put no
+restarts on screen at all.  A controller on its way out does not count."
+  (let* ((window (objc:invoke (listener-view listener) "window"))
+         (controller (objc:invoke window "rootViewController")))
+    (loop for presented = (objc:invoke controller "presentedViewController")
+          while (and (live-pointer-p presented)
+                     (not (objc:invoke-bool presented "isBeingDismissed")))
+          do (setf controller presented))
+    controller))
 
 (defun hide-restarts-panel (&optional (listener *listener*))
   "Dismiss the sheet if it is up, and forget it.  Thread 1.  Idempotent.

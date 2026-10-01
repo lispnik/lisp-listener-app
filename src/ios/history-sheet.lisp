@@ -35,7 +35,8 @@
       (make-history-cell (or (history-row self (objc:invoke index-path "row")) ""))
     (error (condition)
       (note "history cellForRow: ~a" condition)
-      (cffi:null-pointer))))
+      ;; Never nil; see MAKE-BLANK-CELL.
+      (make-blank-cell))))
 
 (objc:define-objc-method ("tableView:didSelectRowAtIndexPath:" :void)
     ((self history-controller)

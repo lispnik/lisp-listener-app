@@ -39,6 +39,50 @@ the next, which is what typing them one after another would do too."
         (type-into-listener listener (load-form path) :record t)
         (incf count)))))
 
+;;; A file the system hands over ---------------------------------------------------
+;;;
+;;; On a phone a file arrives from another app -- Files, Mail, a share sheet --
+;;; as a URL the app may read only while it is being handed over, and LOAD
+;;; happens later, on the listener thread.  So the file is copied somewhere the
+;;; app can always read, and the copy is what is loaded.
+
+(defun settled-namestring (path)
+  "PATH as a string, without the /private that iOS puts in front of /var in
+some of its answers and not in others."
+  (let ((name (namestring path)))
+    (if (eql 0 (search "/private/var/" name))
+        (subseq name (length "/private"))
+        name)))
+
+(defun copy-file-bytes (from to)
+  "Copy the file FROM to TO, replacing it.  Answers TO."
+  (ensure-directories-exist to)
+  (with-open-file (in from :element-type '(unsigned-byte 8))
+    (with-open-file (out to :element-type '(unsigned-byte 8)
+                            :direction :output :if-exists :supersede)
+      (let ((buffer (make-array 8192 :element-type '(unsigned-byte 8))))
+        (loop for count = (read-sequence buffer in)
+              while (plusp count)
+              do (write-sequence buffer out :end count)))))
+  to)
+
+(defun import-opened-file (path directory)
+  "The file to LOAD for PATH, which the system has just handed the app:
+PATH itself when it is already under DIRECTORY -- the app's own documents,
+which it can read at any time -- and otherwise a copy of it in Opened/ there.
+
+Called while the file can still be read, which for a file from another app is
+only until the caller returns; a second file of the same name replaces the
+first, as opening it again should."
+  (let ((name (settled-namestring path))
+        (home (settled-namestring directory)))
+    (if (eql 0 (search home name))
+        name
+        (namestring
+         (copy-file-bytes name (merge-pathnames
+                                (concatenate 'string "Opened/" (file-namestring name))
+                                directory))))))
+
 (defun transcript-text-of (listener)
   "Everything in LISTENER's transcript, as a string.  Thread 1."
   (let ((pointer (listener-view listener)))

@@ -68,12 +68,25 @@ binding's extent.")
 A menu item's action arrives saying nothing about which window it was meant
 for, so the application has to be asked.  Falling back to *LISTENER* keeps the
 answer sensible while no window is key -- during startup, or when another
-application is in front."
+application is in front.
+
+And when the key window is not a listener's at all -- the canvas, in the middle
+of a game -- it is the listener window nearest the front: Interrupt pressed
+over the canvas should stop the game, in the listener that is running it."
   (or (let ((key (ignore-errors
                   (objc:invoke (objc.runloop:shared-application) "keyWindow"))))
         (listener-for-window key))
+      (frontmost-listener)
       *listener*
       (first *listeners*)))
+
+(defun frontmost-listener ()
+  "The listener whose window is nearest the front, or NIL."
+  (ignore-errors
+   (let ((windows (objc:invoke (objc.runloop:shared-application) "orderedWindows")))
+     (when (live-pointer-p windows)
+       (loop for i from 0 below (objc:invoke windows "count")
+             thereis (listener-for-window (objc:invoke windows "objectAtIndex:" i)))))))
 
 (defparameter +ns-event-type-application-defined+ 15
   "NSEventTypeApplicationDefined.  An event AppKit has no meaning for, which
@@ -158,7 +171,10 @@ errors."
           (retarget-main-thread))
         ;; The session ends with the LAST window, not with any window: one of
         ;; three closing leaves two that still need an event loop under them.
+        ;; The canvas goes with the last of them: it is a window, and left open
+        ;; it would be an application with nothing in it to type at.
         (unless *listeners*
+          (hide-canvas)
           (stop-run-loop-soon)))
     (error (condition) (note "windowWillClose: ~a" condition))))
 
@@ -306,6 +322,15 @@ and a menu item whose action no longer resolves is one nothing else notices."
                    :separator
                    ("Interrupt" "listenerInterrupt:" ".")
                    ("Clear Transcript" "listenerClearTranscript:" "k"))
+                 controller)
+    ;; One item per example, by title; the action finds it again by that title.
+    (add-submenu main "Examples"
+                 (append (mapcar (lambda (entry)
+                                   (list (example-title entry) "listenerExample:"))
+                                 *examples*)
+                         '(:separator
+                           ("List Examples" "listenerListExamples:")
+                           ("Show Canvas" "listenerShowCanvas:")))
                  controller)
     (let ((windows (add-submenu main "Window"
                                 '(("Minimize" "performMiniaturize:" "m")

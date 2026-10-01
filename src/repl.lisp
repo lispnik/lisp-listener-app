@@ -326,6 +326,7 @@ transfers control through a restart or aborts to the top level."
                           (read-from-string line nil +eof+)
                         (declare (ignore position))
                         (unless (eq form +eof+)
+                          (canvas-evaluation-begins)
                           (print-values listener
                                         (multiple-value-list (eval form))))))))))))
         (setf (listener-debug-level listener) saved)
@@ -411,6 +412,7 @@ Errors go to the debugger hook, not to here."
        ;; single value gets a blank line above it.
        (setf (stream-column (listener-output listener)) 0)
        (setf - form)
+       (canvas-evaluation-begins)
        (let ((values (multiple-value-list (eval form))))
          (shift-values form values)
          (print-values listener values))

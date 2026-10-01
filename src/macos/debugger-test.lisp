@@ -280,7 +280,31 @@ editing it, which is what AppKit makes first responder for a text field."
                                      (listener-history-table listener))
                     "↓ in the search field moves the keyboard to the list")
         (check-step (>= (objc:invoke (listener-history-table listener) "selectedRow") 0)
-                    "with a row selected"))
+                    "with a row selected")
+        ;; ↑ on the top row, through the table's own -keyDown:, goes back.
+        (let ((table (listener-history-table listener)))
+          (select-restart-row table 0)
+          (objc:invoke table "keyDown:"
+                       (key-equivalent-event panel (string (code-char #xF700)) 0))
+          (pump 0.1d0)
+          (check-step (not (cffi:pointer-eq (objc:invoke panel "firstResponder") table))
+                      "↑ on the top row takes the keyboard back up")
+          (check-step (first-responder-is-p panel (objc:invoke panel "initialFirstResponder"))
+                      "to the search field")
+          ;; And lower down it is the table's own key still, which is super's
+          ;; -keyDown:.  The whole list, to have a second row to be on.
+          (type-history-query "" listener)
+          (pump 0.1d0)
+          (objc:invoke panel "makeFirstResponder:" table)
+          (select-restart-row table 1)
+          (objc:invoke table "keyDown:"
+                       (key-equivalent-event panel (string (code-char #xF700)) 0))
+          (pump 0.1d0)
+          (check-step (and (cffi:pointer-eq (objc:invoke panel "firstResponder") table)
+                           (= 0 (objc:invoke table "selectedRow")))
+                      "↑ on a lower row moves the selection, as in any list")
+          (type-history-query "defun deep" listener)
+          (pump 0.1d0)))
       (choose-history-row listener 0)
       (pump-for 0.3d0)
       (check-step (search "(defun deep" (pending-input view pointer))
@@ -378,6 +402,99 @@ what is checked is everything either side of them."
       (check-step (and (search "CL-USER>" written) (search (load-form lisp) written))
                   "Save Transcript… writes the transcript, the load included"))))
 
+(defun press-menu-item (menu-title item-title)
+  "Choose ITEM-TITLE from MENU-TITLE: its action is sent to its target, with
+the item as the sender, which is what a click comes to.  True if it was sent.
+
+Not -performActionForItemAtIndex:, which declines a disabled item -- and here
+every item is one.  This process is not the active application, and once the
+menu bar has been handed a key equivalent in that state its items all answer NO
+to -isEnabled, while ⌘K goes on being taken.  Measured; it is the driver's
+condition and not the application's."
+  (let* ((application (objc.runloop:shared-application))
+         (holder (objc:invoke (objc:invoke application "mainMenu")
+                              "itemWithTitle:" menu-title))
+         (submenu (and (live-pointer-p holder) (objc:invoke holder "submenu")))
+         (item (and (live-pointer-p submenu)
+                    (objc:invoke submenu "itemWithTitle:" item-title))))
+    (when (live-pointer-p item)
+      (prog1 (objc:invoke-bool application "sendAction:to:from:"
+                               (objc:invoke item "action") (objc:invoke item "target") item)
+        (pump 0.1d0)))))
+
+(defun debugger-test-canvas (listener directory)
+  "The canvas and the examples: the menu, the window, a picture, the keys."
+  (check-step (and (menu-item-present-p "Examples" "Spiral")
+                   (menu-item-present-p "Examples" "Snake"))
+              "the Examples menu lists them, wired to the controller")
+  (check-step (not (canvas-visible-p)) "there is no canvas until something is drawn")
+  (let ((paints *canvas-paints*))
+    (check-step (press-menu-item "Examples" "Spiral") "Examples > Spiral is chosen")
+    (check-step (wait-for (lambda () (search "(example \"spiral\")" (transcript-text listener)))
+                          :timeout 10)
+                "and typed at the prompt")
+    (check-step (wait-for (lambda () (and (canvas-visible-p) (> *canvas-paints* paints)))
+                          :timeout 10)
+                "the canvas opens and is painted")
+    (back-at-top-p listener)
+    (pump-for 0.3d0)
+    (check-step (= 140 (length (canvas-contents))) "with the spiral's 140 lines on it"))
+  (check-step (first-responder-is-p (listener-window listener) (listener-view listener))
+              "the keyboard stays at the prompt")
+  (let ((picture (namestring (merge-pathnames "canvas.png"
+                                              (uiop:ensure-directory-pathname directory)))))
+    (write-window-png *canvas-window* picture)
+    (check-step (and (probe-file picture)
+                     (> (with-open-file (in picture :element-type '(unsigned-byte 8))
+                          (file-length in))
+                        5000))
+                "a picture of it is more than a blank rectangle"))
+  ;; (show) is what a game calls: now the canvas has the keys.
+  (submit-and-wait listener "(progn (show) :shown)" ":SHOWN")
+  (check-step (wait-for (lambda () (first-responder-is-p *canvas-window* (canvas-view-pointer)))
+                        :timeout 5)
+              ;; Which window is KEY cannot be asked here: this process is not
+              ;; the active application, and has none.
+              "(show) leaves the canvas's view first responder in its window")
+  (check-step (eq (current-listener) listener)
+              "a menu command over the canvas still means the listener behind it")
+  (loop while (canvas:key))
+  (objc:invoke (canvas-view-pointer) "keyDown:"
+               (key-equivalent-event *canvas-window* (string (code-char #xF702)) 0))
+  (objc:invoke (canvas-view-pointer) "keyDown:"
+               (key-equivalent-event *canvas-window* "q" 0))
+  (check-step (and (eq (canvas:key) :left) (eql (canvas:key) #\q) (null (canvas:key)))
+              "a left arrow and a q pressed in it are what (key) answers")
+  (submit-and-wait listener "(progn (dotimes (i 5) (frame (dot i 0) (dot 0 i)) (wait 0.02)) :framed)"
+                   ":FRAMED")
+  (check-step (= 2 (length (canvas-contents))) "each frame replaces the last")
+  ;; A shape that is wrong is an error where it was typed, in the debugger.
+  (check-step (raise-error listener "(circle 0 0 :big)")
+              "a bad argument to a shape opens the debugger")
+  (press-top-level-row listener)
+  (check-step (back-at-top-p listener) "and its top-level restart returns")
+  ;; Closed in the middle of an animation, it stays closed until the next
+  ;; form, and the close is Escape to a game; then drawing brings it back.
+  (loop while (canvas:key))
+  (let ((before (length (transcript-text listener))))
+    (type-and-submit listener
+                     "(progn (dotimes (i 30) (frame (dot i 0)) (wait 0.05)) :animated)")
+    (pump-for 0.4d0)
+    (check-step (canvas-visible-p) "an animation is running in the canvas")
+    (objc:invoke *canvas-window* "close")
+    (check-step (wait-for (lambda () (search ":ANIMATED" (transcript-text listener)
+                                             :start2 before))
+                          :timeout 10)
+                "closed half way, the animation runs on to its end")
+    (pump-for 0.2d0))
+  (check-step (and (not (canvas-visible-p)) (eq (canvas:key) :escape))
+              "and the canvas stays closed, with Escape for whatever reads its keys")
+  (submit-and-wait listener "(progn (clear) (dot 0 0 40) :dotted)" ":DOTTED")
+  (check-step (wait-for #'canvas-visible-p :timeout 5) "and drawing opens it again")
+  (hide-canvas)
+  (objc:invoke (listener-window listener) "makeFirstResponder:" (listener-view listener))
+  (pump-for 0.2d0))
+
 (defun run-debugger-test ()
   "Drive the pane and check it.  Exits 0 only when every check held."
   (let ((listener *listener*)
@@ -396,6 +513,7 @@ what is checked is everything either side of them."
     (debugger-test-history listener)
     (debugger-test-two-listeners listener)
     (debugger-test-files listener directory)
+    (debugger-test-canvas listener directory)
     (note "debugger-test: ~:[~d FAILED~;PASS~]"
           (zerop *debugger-test-failures*) *debugger-test-failures*)
     (finish-and-exit (if (zerop *debugger-test-failures*) 0 1))))

@@ -141,8 +141,9 @@ Returns (VALUES POINTER OBJECT)."
 (defparameter *key-bar-height* 44d0)
 
 (defun make-key-bar (object)
-  "The row of keys above the on-screen keyboard: Tab, Esc, the arrows, Clear
-and Stop.  Each does what its hardware key does.
+  "The row of keys above the on-screen keyboard: Tab, Esc, the arrows, Hist,
+Clear and Stop, each doing what its hardware key does, and Try, which lists
+the examples.
 
 A frame rather than constraints: an input accessory view is sized by the
 keyboard from its frame's height, and stretched across from its autoresizing
@@ -162,8 +163,13 @@ mask."
     (uikit:pin stack "bottomAnchor" bar "bottomAnchor")
     (flet ((key (title function)
              (let ((button (uikit:system-button title)))
-               (objc:invoke (objc:invoke button "titleLabel") "setFont:"
-                            (uikit:mono-font 16))
+               ;; Eight keys across a phone leave each about 46 points, and
+               ;; "Clear" at 16 came out as "C…ar": smaller, and allowed to
+               ;; shrink further on a narrower phone rather than lose letters.
+               (let ((label (objc:invoke button "titleLabel")))
+                 (objc:invoke label "setFont:" (uikit:mono-font 14))
+                 (objc:invoke label "setAdjustsFontSizeToFitWidth:" t)
+                 (objc:invoke label "setMinimumScaleFactor:" 0.7d0))
                (uikit:on-tap button
                           (lambda (sender)
                             (declare (ignore sender))
@@ -176,6 +182,7 @@ mask."
       (key "↑" (lambda () (key-arrow object -1)))
       (key "↓" (lambda () (key-arrow object 1)))
       (key "Hist" (lambda () (open-history-popup *listener*)))
+      (key "Try" (lambda () (open-examples-popup *listener*)))
       (key "Clear" (lambda () (clear-transcript *listener*)))
       (key "Stop" (lambda () (abort-evaluation *listener*))))
     bar))

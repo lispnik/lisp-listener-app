@@ -56,7 +56,7 @@ test-ecl:
 	$(ECL) --norc --load tools/headless-test.lisp
 
 ## A listener from a REPL, on thread 1.  Needs objc on the source registry.
-run:
+run: src/examples.lisp
 	$(SBCL) --eval '(asdf:load-system "lisp-listener")' \
 	        --eval '(lisp-listener:run-listener)' --quit
 
@@ -64,7 +64,7 @@ run:
 ## the runtime of whichever SBCL performs the build, so a stock one here pairs
 ## a stock runtime with this core and gives back the very fragility the
 ## safepoint build exists to remove.
-app:
+app: src/examples.lisp
 	$(SBCL) --eval '(asdf:make "lisp-listener-app")' --quit
 
 ## A captioned video of a session in the real window, typed a key at a time:
@@ -77,6 +77,14 @@ demo:
 	    --eval '(asdf:load-system "lisp-listener")' --eval '(lisp-listener:main)'
 	tools/make-demo.sh build/demo
 
+## The examples are read into the image when src/examples.lisp is COMPILED.
+## ASDF knows that -- lisp-listener.asd names them as static files -- but
+## asdf-ios-app's cross-compile goes by the .lisp files alone, and built an app
+## with the spiral of the day before.  So every target that builds one depends
+## on this, which makes the file newer than the examples it holds.
+src/examples.lisp: $(wildcard examples/*.lisp)
+	touch $@
+
 ## The iOS app.  ios-toolchain builds, once, the host and simulator ECLs that
 ## asdf-ios-app cross-compiles with (about ten minutes); set
 ## IOS_SIGNING_IDENTITY to build for a device as well.  asdf-ios-app is itself
@@ -88,12 +96,12 @@ ios-toolchain:
 	    --eval '(asdf:load-system "asdf-ios-app")' \
 	    --eval '(asdf-ios-app:bootstrap-ecl)' --eval '(ext:quit 0)'
 
-ios:
+ios: src/examples.lisp
 	$(IOS_REGISTRY) $(ECL) --norc --eval '(require :asdf)' \
 	    --eval '(asdf:make "lisp-listener-ios")' --eval '(ext:quit 0)'
 
 ## Needs a booted simulator: open -a Simulator.
-run-ios:
+run-ios: src/examples.lisp
 	$(IOS_REGISTRY) $(ECL) --norc --eval '(require :asdf)' \
 	    --eval '(asdf:load-system "asdf-ios-app")' \
 	    --eval '(princ (asdf-ios-app:run-in-simulator "lisp-listener-ios"))' \
@@ -108,7 +116,7 @@ IPA = build/Lisp-Listener.ipa
 IOS_ECL = $(IOS_REGISTRY) $(ECL) --norc --eval '(require :asdf)' \
 	--eval '(handler-bind ((serious-condition (lambda (c) (format *error-output* "~&error: ~a~%" c) (ext:quit 1)))) (asdf:load-system "asdf-ios-app"))'
 
-ios-device:
+ios-device: src/examples.lisp
 	@test -n "$(IOS_SIGNING_IDENTITY)" -a -n "$(IOS_PROVISIONING_PROFILE)" || { echo "error: set IOS_SIGNING_IDENTITY and IOS_PROVISIONING_PROFILE in local.mk" >&2; exit 1; }
 	IOS_SIGNING_IDENTITY="$(IOS_SIGNING_IDENTITY)" IOS_PROVISIONING_PROFILE="$(IOS_PROVISIONING_PROFILE)" \
 	IOS_DEVELOPMENT_TEAM="$(IOS_DEVELOPMENT_TEAM)" $(IOS_ECL) \
@@ -117,7 +125,7 @@ ios-device:
 
 # From a clean build/iphoneos: a stale bundle can lack the compiled icon, and
 # App Store Connect then refuses it for a missing CFBundleIconName.
-ipa:
+ipa: src/examples.lisp
 	@test -n "$(IOS_DISTRIBUTION_IDENTITY)" -a -n "$(IOS_DISTRIBUTION_PROFILE)" || { echo "error: set IOS_DISTRIBUTION_IDENTITY and IOS_DISTRIBUTION_PROFILE in local.mk" >&2; exit 1; }
 	rm -rf build/iphoneos "$(IPA)"
 	LISP_LISTENER_DISTRIBUTION=1 LISP_LISTENER_BUILD="$(BUILD)" \
