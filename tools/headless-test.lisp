@@ -54,7 +54,7 @@
                           "history" "sexp" "paredit" "keymap" "indent" "transcript"
                           "completion" "paren-highlight" "paredit-view" "history-search"
                           "streams" "config"
-                          "restarts" "repl")
+                          "restarts" "files" "repl")
                         #+sbcl '("macos/view" "macos/window" "macos/restarts-panel"
                                  "macos/history-panel" "macos/screenshot"
                                  "macos/app")
@@ -397,6 +397,34 @@ inherited that would be testing the case before it."
     (check (and frame (member "N = 21" (backtrace-frame-locals frame) :test #'string=))
            "and carries its locals, printed: ~s"
            (and frame (backtrace-frame-locals frame)))))
+
+(defcase case-load-files
+    "Open... and a dropped file: LOAD typed at the prompt, one line per file."
+  (let* ((dir (merge-pathnames (format nil "lisp-listener-files-~d/" (random 1000000))
+                               (uiop:temporary-directory)))
+         ;; A quote in the name, which the typed form has to escape.
+         (good (merge-pathnames "say \"hi\".lisp" dir))
+         (other (merge-pathnames "notes.txt" dir))
+         (bad (merge-pathnames "broken.lisp" dir)))
+    (ensure-directories-exist dir)
+    (with-open-file (out good :direction :output :if-exists :supersede)
+      (write-string "(defun cl-user::from-a-file () 42)" out))
+    (with-open-file (out other :direction :output :if-exists :supersede)
+      (write-string "not lisp" out))
+    (with-open-file (out bad :direction :output :if-exists :supersede)
+      (write-string "(error \"the file is broken\")" out))
+    (unwind-protect
+         (progn
+           (check (string= (format nil "(load ~s)" (namestring good)) (load-form good))
+                  "the typed form names the file, quote and all")
+           (check (= 1 (load-files-into-listener listener (list good other)))
+                  "a Lisp file is loaded and a text file is not")
+           (say listener "(cl-user::from-a-file)")
+           (check-text listener "CL-USER> 42" "what it defined is there to call")
+           (load-files-into-listener listener (list bad))
+           (check-text listener "the file is broken" "an error in a file opens the debugger")
+           (check-text listener "[1] CL-USER>" "at level 1, as any error does"))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
 (defcase case-no-blank-line
     "A value comes straight after the line typed, at any level."
@@ -964,6 +992,7 @@ bound away from the front end's own -- a test has no business writing into
                 case-store-value
                 case-y-or-n-p case-abort case-interrupt case-nested-debugger
                 case-nested-backtrace case-no-blank-line case-backtrace-trim
+                case-load-files
                 case-toplevel-restart-index
                 case-interactive-restarts-are-marked case-restart-rows
                 case-two-listeners case-nil-is-nobody case-history case-completion

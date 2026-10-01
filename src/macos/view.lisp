@@ -86,6 +86,30 @@ that they can be untinted.  Thread 1 only; see src/paren-highlight.lisp."))
 (define-listener-method ("listenerDrainQueue" :void) ()
   (drain-main-thread-queue))
 
+(defun dragged-file-paths (dragging-info)
+  "The file paths on a drag's pasteboard, as Lisp strings; NIL when it carries
+none.  Asked of NSURL, which is how a file arrives from the Finder."
+  (let* ((pasteboard (objc:invoke dragging-info "draggingPasteboard"))
+         (urls (objc:invoke pasteboard "readObjectsForClasses:options:"
+                            (objc:invoke "NSArray" "arrayWithObject:"
+                                         (objc:coerce-to-objc-class "NSURL"))
+                            (cffi:null-pointer))))
+    (unless (cffi:null-pointer-p urls)
+      (loop for i from 0 below (objc:invoke urls "count")
+            for url = (objc:invoke urls "objectAtIndex:" i)
+            when (objc:invoke-bool url "isFileURL")
+              collect (objc:ns-string-to-string (objc:invoke url "path"))))))
+
+;;; A Lisp file dropped on the window is loaded into it, as File > Open... would.
+;;; Anything else -- text, a file that is not Lisp -- is the text view's, which
+;;; inserts it as it always has.
+(define-listener-method ("performDragOperation:" objc:objc-bool)
+    ((sender objc:objc-object-pointer))
+  (let ((paths (remove-if-not #'loadable-file-p (dragged-file-paths sender))))
+    (if paths
+        (progn (load-files-into-listener *listener* paths) t)
+        (objc:invoke-bool (objc:current-super) "performDragOperation:" sender))))
+
 (define-listener-method ("insertNewline:" :void)
     ((sender objc:objc-object-pointer))
   (submit-input self pointer))

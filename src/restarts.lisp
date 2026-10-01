@@ -72,19 +72,20 @@ as a plist, for whatever has to find them again -- the Mac lays its panel out
 afresh on every resize."))
   (:objc-class-name "LispListenerRestartsController"))
 
-(defun type-into-listener (listener line)
+(defun type-into-listener (listener line &key record)
   "Type LINE at LISTENER's prompt and press Return, as a person would.  Thread 1.
 
 Through the view, so the transcript shows what was chosen -- `[1] CL-USER> 3'
 -- exactly as if it had been typed; and whatever the person HAD typed there
 is put back afterwards rather than sent along with it.  With no view, straight
-onto the input queue."
+onto the input queue.  RECORD puts the line in the history: a restart's
+number does not belong there, a file loaded does."
   (let ((view (listener-view-object listener))
         (pointer (listener-view listener)))
     (if (and view pointer)
         (let ((pending (pending-input view pointer)))
           (replace-pending-input view pointer line)
-          (submit-input view pointer :record nil)
+          (submit-input view pointer :record record)
           (when (plusp (length pending))
             (replace-pending-input view pointer pending)))
         (queue-push-string (listener-input listener) (format nil "~a~%" line))))

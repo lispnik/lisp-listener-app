@@ -5,7 +5,11 @@
 
 SBCL ?= sbcl
 
+# Signing, which is personal: local.mk, never committed.  See doc/testflight.md.
+-include local.mk
+
 .PHONY: deps check syntax-check compile-check test test-ecl run app demo ios-demo \
+        ios-device ipa testflight \
         ios-toolchain ios run-ios clean
 
 ECL ?= ecl
@@ -94,6 +98,37 @@ run-ios:
 	    --eval '(asdf:load-system "asdf-ios-app")' \
 	    --eval '(princ (asdf-ios-app:run-in-simulator "lisp-listener-ios"))' \
 	    --eval '(ext:quit 0)'
+
+## iOS on a phone.  `ios-device' builds a development app for a connected
+## device (IOS_SIGNING_IDENTITY and IOS_PROVISIONING_PROFILE in local.mk);
+## `ipa' an App Store build, packaged; `testflight' checks, validates and
+## uploads it.  doc/testflight.md has the one-time steps.
+BUILD ?= 0.1.$(shell git rev-list --count HEAD)
+IPA = build/Lisp-Listener.ipa
+IOS_ECL = $(IOS_REGISTRY) $(ECL) --norc --eval '(require :asdf)' \
+	--eval '(handler-bind ((serious-condition (lambda (c) (format *error-output* "~&error: ~a~%" c) (ext:quit 1)))) (asdf:load-system "asdf-ios-app"))'
+
+ios-device:
+	@test -n "$(IOS_SIGNING_IDENTITY)" -a -n "$(IOS_PROVISIONING_PROFILE)" || { echo "error: set IOS_SIGNING_IDENTITY and IOS_PROVISIONING_PROFILE in local.mk" >&2; exit 1; }
+	IOS_SIGNING_IDENTITY="$(IOS_SIGNING_IDENTITY)" IOS_PROVISIONING_PROFILE="$(IOS_PROVISIONING_PROFILE)" \
+	IOS_DEVELOPMENT_TEAM="$(IOS_DEVELOPMENT_TEAM)" $(IOS_ECL) \
+	    --eval '(print (uiop:symbol-call :asdf-ios-app "MAKE-APP" "lisp-listener-ios" :platforms (list :device)))' \
+	    --eval '(ext:quit 0)'
+
+# From a clean build/iphoneos: a stale bundle can lack the compiled icon, and
+# App Store Connect then refuses it for a missing CFBundleIconName.
+ipa:
+	@test -n "$(IOS_DISTRIBUTION_IDENTITY)" -a -n "$(IOS_DISTRIBUTION_PROFILE)" || { echo "error: set IOS_DISTRIBUTION_IDENTITY and IOS_DISTRIBUTION_PROFILE in local.mk" >&2; exit 1; }
+	rm -rf build/iphoneos "$(IPA)"
+	LISP_LISTENER_DISTRIBUTION=1 LISP_LISTENER_BUILD="$(BUILD)" \
+	IOS_SIGNING_IDENTITY="$(IOS_DISTRIBUTION_IDENTITY)" \
+	IOS_PROVISIONING_PROFILE="$(IOS_DISTRIBUTION_PROFILE)" \
+	IOS_DEVELOPMENT_TEAM="$(IOS_DEVELOPMENT_TEAM)" $(IOS_ECL) \
+	    --eval '(uiop:symbol-call :asdf-ios-app "EXPORT-IPA" (first (uiop:symbol-call :asdf-ios-app "MAKE-APP" "lisp-listener-ios" :platforms (list :device))) :output (merge-pathnames "$(IPA)" (uiop:getcwd)))' \
+	    --eval '(ext:quit 0)'
+
+testflight: ipa
+	ASC_KEY_ID="$(ASC_KEY_ID)" ASC_ISSUER_ID="$(ASC_ISSUER_ID)" tools/testflight.sh "$(IPA)"
 
 ## The iOS app's self-test, recorded from the booted simulator and captioned
 ## step by step: build/ios-demo/lisp-listener-ios-demo.mp4.  Run `make run-ios'

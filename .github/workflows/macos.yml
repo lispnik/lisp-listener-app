@@ -432,8 +432,11 @@ jobs:
         # On request only -- Run workflow, in the Actions tab -- because a
         # runner has neither ffmpeg nor ImageMagick, and installing them would
         # put minutes on every push for a video nobody asked for.
-        if: github.event_name == 'workflow_dispatch' && matrix.arch == 'arm64'
+        # And on a version tag, where it goes on the release beside the app.
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && matrix.arch == 'arm64'
         working-directory: sbcl-macos
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eux
           # ffmpeg-full: Homebrew's plain ffmpeg has no libass, so no
@@ -441,9 +444,13 @@ jobs:
           brew install ffmpeg-full imagemagick
           export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
           perl -e 'alarm shift; exec @ARGV' 1200 make demo SBCL="$SBCL_SAFEPOINT"
+          # The README links releases/latest/download/lisp-listener-demo.mp4.
+          case "$GITHUB_REF" in
+            refs/tags/v*) gh release upload "$GITHUB_REF_NAME" build/demo/lisp-listener-demo.mp4 --clobber ;;
+          esac
 
       - name: Keep the demo video
-        if: github.event_name == 'workflow_dispatch' && matrix.arch == 'arm64'
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && matrix.arch == 'arm64'
         uses: actions/upload-artifact@v7
         with:
           name: demo

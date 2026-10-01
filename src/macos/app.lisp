@@ -62,6 +62,45 @@ with NIL and builds a fresh one.")
   (handler-case (open-history-popup (current-listener))
     (error (condition) (note "listenerHistory: ~a" condition))))
 
+(defun url-paths (urls)
+  "The file paths of an NSArray of NSURLs, as Lisp strings."
+  (loop for i from 0 below (objc:invoke urls "count")
+        for url = (objc:invoke urls "objectAtIndex:" i)
+        for path = (objc:invoke url "path")
+        unless (cffi:null-pointer-p path)
+          collect (objc:ns-string-to-string path)))
+
+(defconstant +ns-modal-response-ok+ 1)
+
+(objc:define-objc-method ("listenerOpen:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  ;; Modal, as Open is everywhere: thread 1 waits on the panel, and the
+  ;; listener thread -- which may be printing -- waits on thread 1 only for the
+  ;; hop, which resumes when the panel goes.
+  (handler-case
+      (let ((listener (current-listener))
+            (panel (objc:invoke "NSOpenPanel" "openPanel")))
+        (objc:invoke panel "setAllowsMultipleSelection:" t)
+        (objc:invoke panel "setCanChooseDirectories:" nil)
+        (objc:invoke panel "setMessage:" "Choose Lisp files to load into the listener.")
+        (objc:invoke panel "setPrompt:" "Load")
+        (when (and listener (= (objc:invoke panel "runModal") +ns-modal-response-ok+))
+          (load-files-into-listener listener (url-paths (objc:invoke panel "URLs")))))
+    (error (condition) (note "listenerOpen: ~a" condition))))
+
+(objc:define-objc-method ("listenerSaveTranscript:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  (handler-case
+      (let ((listener (current-listener))
+            (panel (objc:invoke "NSSavePanel" "savePanel")))
+        (objc:invoke panel "setNameFieldStringValue:" "Lisp Listener Transcript.txt")
+        (when (and listener (= (objc:invoke panel "runModal") +ns-modal-response-ok+))
+          (save-transcript listener (objc:ns-string-to-string
+                                     (objc:invoke (objc:invoke panel "URL") "path")))))
+    (error (condition) (note "listenerSaveTranscript: ~a" condition))))
+
 (objc:define-objc-method ("listenerClearTranscript:" :void)
     ((self listener-controller) (sender objc:objc-object-pointer))
   (declare (ignorable sender))

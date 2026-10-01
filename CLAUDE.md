@@ -36,6 +36,8 @@ make ios-toolchain  # once: asdf-ios-app builds the host and iOS ECLs (~10 min)
 make ios            # => build/iphonesimulator/Lisp Listener.app
 make run-ios        # build, install and launch in the booted simulator
 make ios-demo       # => build/ios-demo/lisp-listener-ios-demo.mp4, from the self-test
+make ios-device     # a signed development build for a phone (local.mk)
+make testflight     # an App Store .ipa, checked, validated, uploaded (doc/testflight.md)
 ```
 
 The iOS targets run under **ECL**, not SBCL: asdf-ios-app is ECL code and
@@ -130,7 +132,7 @@ order is load-bearing**:
 
 - `lisp-listener/core` — `src/`: `package impl main-thread queue listener history
   sexp paredit keymap indent transcript completion paren-highlight paredit-view
-  history-search streams config restarts repl`. No toolkit; SBCL and ECL.
+  history-search streams config restarts files repl`. No toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
   history-panel screenshot debugger-test demo app`. The name it always had.
 - `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet app`.
@@ -199,6 +201,13 @@ NSTextView and UITextView share.
   thousand `write-char`s into one hop to the main thread.
 - `src/restarts.lisp` — what the restarts panel does, on either platform: the
   titles, which restart Cancel means, and the hop to put them up and take them down.
+- `src/files.lisp` — File ▸ Open… and a file dropped on the window both load by
+  typing `(load "…")` at the prompt (`load-files-into-listener`), so the
+  transcript records it, an error opens the debugger, and the line goes into
+  the history; nothing is loaded on thread 1. Save Transcript… is
+  `save-transcript`. The panels are `src/macos/app.lisp`'s, the drop is the
+  view's `-performDragOperation:`, which leaves anything not Lisp to the text
+  view.
 - `src/repl.lisp` — the listener thread, the debugger and the backtrace. Each
   frame is captured with its locals (`backtrace-frame`), printed on the listener
   thread while the stack exists; SBCL only, since ECL's frame stack keeps
@@ -241,7 +250,8 @@ NSTextView and UITextView share.
 - `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the
   docked debugger through what a person does with it and checks each step:
   docking, frames and locals, the keys, the divider, the value field, Escape,
-  a second level, the history sheet, and a second listener beside the first.
+  a second level, the history sheet, a second listener beside the first, and
+  File ▸ Open…, a dropped file and Save Transcript….
   Exits 0 only if every check held; `macos.yml` runs it on
   both architectures. **Everything in the pane is AppKit, so the headless test
   reaches none of it**; every bug in the pane's first versions was found by
@@ -281,8 +291,9 @@ them, runs the self-test, builds and runs the bundle, proves the ocicl-only path
 and takes the screenshots — on **arm64 and Intel**. On a `v*` tag each leg also
 zips the app it built and ran (`ditto`, which keeps the signature) and attaches
 it to that tag's release; the app is signed ad hoc, and the release notes say
-how to get past Gatekeeper. On Run workflow (`workflow_dispatch`) the arm64 leg
-also makes the demo video, last, with Homebrew's `ffmpeg-full` -- the plain
+how to get past Gatekeeper. On Run workflow (`workflow_dispatch`), and on a tag,
+the arm64 leg also makes the demo video -- on a tag it goes on the release,
+which is what the README's video link points at -- last, with Homebrew's `ffmpeg-full` -- the plain
 `ffmpeg` formula has no libass and so no captions. The Intel leg is not
 box-ticking: a struct over sixteen bytes returns through `objc_msgSend_stret` on
 x86-64 and through `x8` on arm64, and every `NSRange` and `NSRect` here crosses

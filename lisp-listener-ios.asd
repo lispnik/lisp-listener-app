@@ -12,6 +12,9 @@
 ;;;; that (asdf-ios-app:bootstrap-ecl) builds, which is what `make ios-toolchain'
 ;;;; runs.  The simulator is the default; a device is built for only when the
 ;;;; environment says how to sign for one, and nobody's identity is committed.
+;;;; LISP_LISTENER_DISTRIBUTION=1 is an App Store build -- `make ipa', and
+;;;; doc/testflight.md -- for the device alone and without get-task-allow,
+;;;; which App Store Connect refuses.
 
 (defsystem "lisp-listener-ios"
   :defsystem-depends-on ("asdf-ios-app")
@@ -19,15 +22,21 @@
   :build-operation "ios-app-op"
   :entry-point "lisp-listener:ios-start"
   :description "A Lisp Listener in a UITextView: the REPL, the debugger and its restarts, on the phone."
-  :version "0.1.0"
+  ;; The build number, which every upload must raise: `make ipa' sets it from
+  ;; the commit count.
+  :version #.(or (uiop:getenv "LISP_LISTENER_BUILD") "0.1.0")
+  :bundle-short-version "0.1.0"
   :depends-on ("lisp-listener/ios")
 
   :bundle-identifier "org.lispnik.lisp-listener"
   :bundle-name "Lisp Listener"
   :bundle-executable "lisp-listener"
-  :bundle-platforms #.(if (uiop:getenv "IOS_SIGNING_IDENTITY")
-                          '(:simulator :device)
-                          '(:simulator))
+  :bundle-platforms #.(cond ((uiop:getenv "LISP_LISTENER_DISTRIBUTION") '(:device))
+                            ((uiop:getenv "IOS_SIGNING_IDENTITY") '(:simulator :device))
+                            (t '(:simulator)))
+  :get-task-allow #.(not (uiop:getenv "LISP_LISTENER_DISTRIBUTION"))
+  ;; Export compliance, answered: the listener encrypts nothing.
+  :bundle-info-plist (("ITSAppUsesNonExemptEncryption" . :false))
   :bundle-orientations (:portrait :landscape-left :landscape-right)
   ;; An asset catalogue, compiled by actool.  Its icon is 1024x1024 and has no
   ;; alpha channel, both of which iOS requires.

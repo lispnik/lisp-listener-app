@@ -308,6 +308,64 @@ history are its own, and closing it leaves the first as it was."
     (check-step (and (submit-and-wait first "(+ 2 3)" "5") t)
                 "and the first, untouched, still evaluates")))
 
+;;; A stand-in for AppKit's dragging info: all -performDragOperation: asks of
+;;; it is its pasteboard.  So a drop is driven through the view's own IMP.
+(objc:define-objc-class test-drag ()
+  ((pasteboard :initform nil :accessor test-drag-pasteboard))
+  (:objc-class-name "LispListenerTestDrag"))
+
+(objc:define-objc-method ("draggingPasteboard" objc:objc-object-pointer)
+    ((self test-drag))
+  (test-drag-pasteboard self))
+
+(defun drop-files (listener paths)
+  "Drop PATHS on LISTENER's view, as the Finder would.  Answers what the view's
+-performDragOperation: answered."
+  (let ((pasteboard (objc:invoke "NSPasteboard" "pasteboardWithUniqueName"))
+        (urls (objc:invoke "NSMutableArray" "array"))
+        (drag (make-instance 'test-drag)))
+    (objc:invoke pasteboard "clearContents")
+    (dolist (path paths)
+      (objc:invoke urls "addObject:" (objc:invoke "NSURL" "fileURLWithPath:" path)))
+    (objc:invoke pasteboard "writeObjects:" urls)
+    (setf (test-drag-pasteboard drag) pasteboard)
+    (prog1 (objc:invoke-bool (listener-view listener) "performDragOperation:"
+                             (objc:objc-object-pointer drag))
+      (objc:invoke pasteboard "releaseGlobally"))))
+
+(defun debugger-test-files (listener directory)
+  "File > Open..., a drop, and Save Transcript...: the panels are AppKit's, so
+what is checked is everything either side of them."
+  (check-step (and (menu-item-present-p "File" "Open…")
+                   (menu-item-present-p "File" "Save Transcript…"))
+              "the File menu has Open… and Save Transcript…, wired to the controller")
+  (let* ((dir (uiop:ensure-directory-pathname (merge-pathnames "files/" directory)))
+         (lisp (namestring (merge-pathnames "dropped.lisp" dir)))
+         (text (namestring (merge-pathnames "dropped.txt" dir)))
+         (saved (namestring (merge-pathnames "transcript.txt" dir))))
+    (ensure-directories-exist dir)
+    (with-open-file (out lisp :direction :output :if-exists :supersede)
+      (write-string "(defun cl-user::dropped-in () :dropped)" out))
+    (with-open-file (out text :direction :output :if-exists :supersede)
+      (write-string "words" out))
+    (check-step (drop-files listener (list lisp)) "a Lisp file dropped on the window is taken")
+    (check-step (wait-for (lambda () (search (load-form lisp) (transcript-text listener)))
+                          :timeout 10)
+                "and loaded, with the load typed at the prompt")
+    (back-at-top-p listener)
+    (check-step (submit-and-wait listener "(cl-user::dropped-in)" ":DROPPED")
+                "what it defined is there to call")
+    (let ((before (length (transcript-text listener))))
+      (drop-files listener (list text))
+      (pump-for 0.3d0)
+      (check-step (not (search "(load" (transcript-text listener) :start2 before))
+                  "a text file dropped is not loaded")
+      (replace-pending-input (listener-view-object listener) (listener-view listener) ""))
+    (save-transcript listener saved)
+    (let ((written (uiop:read-file-string saved :external-format :utf-8)))
+      (check-step (and (search "CL-USER>" written) (search (load-form lisp) written))
+                  "Save Transcript… writes the transcript, the load included"))))
+
 (defun run-debugger-test ()
   "Drive the pane and check it.  Exits 0 only when every check held."
   (let ((listener *listener*)
@@ -325,6 +383,7 @@ history are its own, and closing it leaves the first as it was."
     (debugger-test-levels listener)
     (debugger-test-history listener)
     (debugger-test-two-listeners listener)
+    (debugger-test-files listener directory)
     (note "debugger-test: ~:[~d FAILED~;PASS~]"
           (zerop *debugger-test-failures*) *debugger-test-failures*)
     (finish-and-exit (if (zerop *debugger-test-failures*) 0 1))))

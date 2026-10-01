@@ -18,6 +18,8 @@
 
 (in-package #:lisp-listener)
 
+(defparameter *demo-window-width* 860d0)
+(defparameter *demo-window-height* 600d0)
 (defvar *demo-directory* nil)
 (defvar *demo-frames* '())      ; (path . seconds), newest first
 (defvar *demo-clock* 0d0)       ; seconds of video so far
@@ -125,8 +127,17 @@ the captions."
         (uiop:ensure-directory-pathname (uiop:getenv "LISP_LISTENER_DEMO")))
   (ensure-directories-exist (merge-pathnames "frames/" *demo-directory*))
   (let* ((listener *listener*) (window (listener-window listener)))
-    ;; Big enough for the pane and the transcript together.
-    (objc:invoke window "setFrame:display:" (vector 120d0 120d0 860d0 700d0) t)
+    ;; One size everywhere, so the video is the same from any machine: big
+    ;; enough for the pane and the transcript together, small enough for any
+    ;; screen -- a CI runner's leaves about 680 points, and 700 was clamped to
+    ;; 677 there and to 639 here.  Placed inside the visible frame, so nothing
+    ;; moves it.
+    (let ((visible (objc:invoke (objc:invoke window "screen") "visibleFrame")))
+      (objc:invoke window "setFrame:display:"
+                   (vector (+ (aref visible 0) 40d0)
+                           (- (+ (aref visible 1) (aref visible 3)) 40d0 *demo-window-height*)
+                           *demo-window-width* *demo-window-height*)
+                   t))
     (demo-at-prompt) (pump-for 0.5d0)
 
     (demo-caption "Type a form and press Return: its value comes back in the same window")

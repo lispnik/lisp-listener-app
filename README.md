@@ -16,6 +16,16 @@ it is defined from Lisp, through
 (lisp-listener:run-listener)
 ```
 
+![An error docks the debugger under the transcript: frames open to their locals, ⌘ and a number takes a restart, and a restart that needs a value asks for it](doc/demo.gif)
+
+**[The whole demo](https://github.com/lispnik/sbcl-macos/releases/latest/download/lisp-listener-demo.mp4)**
+(a minute, captioned): typing, paredit, Option-Return, ⌘. and ⌘R, then the
+debugger. Made by `make demo`, which plays the session in the real window a key
+at a time and photographs it -- not a screen recording.
+
+**[Download the app](https://github.com/lispnik/sbcl-macos/releases/latest)**
+for Apple silicon or Intel: SBCL is inside it, and nothing else is needed.
+
 ![A listener session](doc/screenshots/session.png)
 
 The debugger prints the condition and a numbered restart list, and the prompt

@@ -42,6 +42,7 @@
                  (:file "streams")
                  (:file "config")
                  (:file "restarts")
+                 (:file "files")
                  (:file "repl")))))
 
 (defsystem "lisp-listener"

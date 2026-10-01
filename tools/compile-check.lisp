@@ -45,7 +45,7 @@
   '("package" "impl" "main-thread" "queue" "listener" "history" "sexp" "paredit"
     "keymap" "indent" "transcript" "completion" "paren-highlight" "paredit-view" "history-search"
     "streams" "config"
-    "restarts" "repl"))
+    "restarts" "files" "repl"))
 
 (defparameter *front-ends*
   '(("macos" "macos/view" "macos/window" "macos/restarts-panel"

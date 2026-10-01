@@ -282,6 +282,12 @@ and a menu item whose action no longer resolves is one nothing else notices."
                    ("Hide Others" "hideOtherApplications:" "H")
                    :separator
                    ("Quit Lisp Listener" "terminate:" "q")))
+    ;; Ours too, so the controller: Open... loads into the front listener, and
+    ;; Save Transcript... writes the front listener's transcript.
+    (add-submenu main "File"
+                 '(("Open…" "listenerOpen:" "o")
+                   ("Save Transcript…" "listenerSaveTranscript:" "S"))
+                 controller)
     (add-submenu main "Edit"
                  '(("Cut" "cut:" "x")
                    ("Copy" "copy:" "c")

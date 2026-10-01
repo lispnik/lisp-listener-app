@@ -7,3 +7,6 @@ build/
 # ocicl-vendored dependency sources -- restore with `ocicl install' (make deps).
 # The lockfile, ocicl.csv, IS committed; what it pins is not.
 /ocicl/
+
+# Personal signing settings for iOS; see doc/testflight.md.
+/local.mk
