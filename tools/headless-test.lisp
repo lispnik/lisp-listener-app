@@ -448,7 +448,9 @@ inherited that would be testing the case before it."
   ;; object -- Escape would have invoked `[CONTINUE] Retry using
   ;; *NO-SUCH-VARIABLE*' and spun, rather than returning to the top level.
   (say listener (missing-variable-source "*yet-another-missing*"))
-  (check-text listener "Restarts:" "the debugger is up")
+  ;; The prompt, not "Restarts:": output arrives in pieces, and reading the
+  ;; list the moment its heading appeared sometimes found no lines under it.
+  (check-text listener "[1] CL-USER>" "the debugger is up, its list complete")
   (let* ((text (transcript-so-far listener))
          (start (search "Restarts:" text))
          (abort-line (search "[ABORT]" text :start2 (or start 0))))

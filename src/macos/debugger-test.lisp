@@ -269,6 +269,18 @@ editing it, which is what AppKit makes first responder for a text field."
         (pump 0.1d0)
         (check-step (< 0 (history-row-count listener) all)
                     "typing narrows it (~d rows -> ~d)" all (history-row-count listener)))
+      ;; ↓ from the search field, as the field editor sends it to the
+      ;; field's delegate: the list takes the keyboard.
+      (let ((field (objc:invoke panel "firstResponder")))
+        (objc:invoke (objc:objc-object-pointer (listener-history-controller listener))
+                     "control:textView:doCommandBySelector:"
+                     field field (objc:coerce-to-selector "moveDown:"))
+        (pump 0.1d0)
+        (check-step (cffi:pointer-eq (objc:invoke panel "firstResponder")
+                                     (listener-history-table listener))
+                    "↓ in the search field moves the keyboard to the list")
+        (check-step (>= (objc:invoke (listener-history-table listener) "selectedRow") 0)
+                    "with a row selected"))
       (choose-history-row listener 0)
       (pump-for 0.3d0)
       (check-step (search "(defun deep" (pending-input view pointer))

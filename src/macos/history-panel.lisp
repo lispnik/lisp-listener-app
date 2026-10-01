@@ -63,6 +63,38 @@
   (handler-case (hide-history-popup (history-controller-listener self))
     (error (condition) (note "historyDismiss: ~a" condition))))
 
+(defun focus-history-list (listener)
+  "Give the list the keyboard, with a row selected: the way down from the
+search field.  True when there was a row to go to.  Thread 1.
+
+Once there the list keeps the keys a list has -- the arrows move the
+selection -- and the sheet's buttons keep theirs: Return is Insert, Escape is
+Cancel."
+  (let ((panel (listener-history-panel listener))
+        (table (listener-history-table listener)))
+    (when (and panel table (not (cffi:null-pointer-p table))
+               (plusp (objc:invoke table "numberOfRows")))
+      (when (minusp (objc:invoke table "selectedRow"))
+        (select-restart-row table 0))
+      (objc:invoke table "scrollRowToVisible:" (objc:invoke table "selectedRow"))
+      (objc:invoke panel "makeFirstResponder:" table)
+      t)))
+
+;;; ↓ in the search field goes down into the list.  The field editor offers
+;;; every key it would act on to the field's delegate first, as a selector:
+;;; answering true for moveDown: is what stops it putting the caret at the end
+;;; of the query instead.
+(objc:define-objc-method ("control:textView:doCommandBySelector:" objc:objc-bool)
+    ((self history-controller)
+     (control objc:objc-object-pointer)
+     (text-view objc:objc-object-pointer)
+     (command objc:sel))
+  (declare (ignorable control text-view))
+  (handler-case
+      (and (string= "moveDown:" (objc:selector-name command))
+           (focus-history-list (history-controller-listener self)))
+    (error (condition) (note "history doCommandBySelector: ~a" condition) nil)))
+
 ;;; The search field's delegate: NSSearchField tells its delegate on every
 ;;; keystroke, which is what makes the narrowing incremental.
 
