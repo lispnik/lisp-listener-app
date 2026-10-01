@@ -558,7 +558,10 @@ Each of these is a bug that actually happened here.
   came straight back at frame eleven. `canvas-closed-by-person` sets
   `*canvas-dismissed*` (and pushes Escape, so a game ends), and the REPL clears
   it before each evaluation (`canvas-evaluation-begins`), at the top level and
-  at a debugger prompt alike.
+  at a debugger prompt alike. The flag is tested **twice**: where the redisplay
+  is asked for, and again in the hop on thread 1 -- a hop already queued when
+  the window closed reopened it, one run in several, and only CI's arm64 leg
+  lost that race.
 
 - **In a driven run every menu item answers NO to `-isEnabled`.** The process
   is not the active application, and once the menu bar has been handed a key

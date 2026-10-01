@@ -116,7 +116,11 @@ where the shape was asked for, rather than later in -drawRect:."
           ;; to ask again, and a hop that failed must not wedge the next.
           (bt:with-lock-held (*canvas-lock*)
             (setf *canvas-redisplay-scheduled* nil))
-          (redisplay-canvas)))))
+          ;; Asked again HERE, on thread 1, where the canvas is closed: a hop
+          ;; already on its way when the person closed it would otherwise
+          ;; arrive a moment later and open it again.
+          (unless *canvas-dismissed*
+            (redisplay-canvas))))))
   nil)
 
 (defun canvas-add (op)
