@@ -37,7 +37,9 @@
   :get-task-allow #.(not (uiop:getenv "LISP_LISTENER_DISTRIBUTION"))
   ;; Export compliance, answered: the listener encrypts nothing.
   :bundle-info-plist (("ITSAppUsesNonExemptEncryption" . :false))
-  :bundle-orientations (:portrait :landscape-left :landscape-right)
+  ;; All four: an app that runs on an iPad must, for multitasking, and App
+  ;; Store Connect refuses a bundle without upside-down portrait (90474).
+  :bundle-orientations (:portrait :portrait-upside-down :landscape-left :landscape-right)
   ;; An asset catalogue, compiled by actool.  Its icon is 1024x1024 and has no
   ;; alpha channel, both of which iOS requires.
   :bundle-icon "res/LispListener.xcassets"
