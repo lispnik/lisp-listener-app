@@ -235,6 +235,39 @@ editing it, which is what AppKit makes first responder for a text field."
                 (pending-input view pointer))
     (replace-pending-input view pointer "")))
 
+(defun debugger-test-line-start (listener)
+  "C-a, Home and ⌘←: the start of the line is after the prompt."
+  (let* ((view (listener-view-object listener))
+         (pointer (listener-view listener)))
+    (back-at-top-p listener)
+    (replace-pending-input view pointer "(+ 1 2)")
+    (flet ((caret () (- (caret-index pointer) (view-input-start view)))
+           (to-end () (objc:invoke pointer "setSelectedRange:"
+                                   (cons (transcript-length pointer) 0))))
+      (dolist (selector '("moveToBeginningOfParagraph:" "moveToBeginningOfLine:"
+                          "moveToLeftEndOfLine:"))
+        (to-end)
+        (objc:invoke pointer selector (cffi:null-pointer))
+        (check-step (zerop (caret))
+                    "-~a puts the caret after the prompt, not before it" selector))
+      (to-end)
+      (objc:invoke pointer "moveToBeginningOfParagraphAndModifySelection:" (cffi:null-pointer))
+      (check-step (equal (objc:invoke pointer "selectedRange")
+                         (cons (view-input-start view) 7))
+                  "with Shift it selects back to the prompt, and no further")
+      ;; A second line starts at the margin, and that is the text view's own.
+      (replace-pending-input view pointer (format nil "(list 1~%      2)"))
+      (to-end)
+      (objc:invoke pointer "moveToBeginningOfParagraph:" (cffi:null-pointer))
+      (check-step (= 8 (caret)) "on a second line of input it is that line's start")
+      ;; And up in the transcript nothing of ours is in the way.
+      (objc:invoke pointer "setSelectedRange:" (cons 3 0))
+      (objc:invoke pointer "moveToBeginningOfParagraph:" (cffi:null-pointer))
+      (check-step (zerop (caret-index pointer))
+                  "in the transcript above, the start of the line is the margin"))
+    (replace-pending-input view pointer "")
+    (objc:invoke pointer "setSelectedRange:" (cons (transcript-length pointer) 0))))
+
 (defun debugger-test-levels (listener)
   (raise-error listener "(+ 1 *no-such-variable*)")
   (type-and-submit listener "(error \"second\")")
@@ -672,6 +705,7 @@ the file they are written to."
     (debugger-test-divider listener)
     (debugger-test-value listener directory)
     (debugger-test-pending-input listener)
+    (debugger-test-line-start listener)
     (debugger-test-levels listener)
     (debugger-test-history listener)
     (debugger-test-two-listeners listener)

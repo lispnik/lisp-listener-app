@@ -121,6 +121,24 @@ none.  Asked of NSURL, which is how a file arrives from the Finder."
   (unless (insert-indented-newline self pointer)
     (objc:invoke (objc:current-super) "insertNewlineIgnoringFieldEditor:" sender)))
 
+;;; The start of the line is after the prompt.  C-a is
+;;; -moveToBeginningOfParagraph: in AppKit's standard bindings, Home and ⌘← are
+;;; the other two, and each has a twin that extends the selection (with Shift).
+;;; Only the input's first line is ours: on any other, and up in the
+;;; transcript, the left margin is the start of the line and super has it.
+(macrolet ((define-line-start (selector extend)
+             `(define-listener-method (,selector :void)
+                  ((sender objc:objc-object-pointer))
+                (unless (and (caret-on-first-input-line-p self pointer)
+                             (move-to-input-line-start self pointer :extend ,extend))
+                  (objc:invoke (objc:current-super) ,selector sender)))))
+  (define-line-start "moveToBeginningOfParagraph:" nil)
+  (define-line-start "moveToBeginningOfLine:" nil)
+  (define-line-start "moveToLeftEndOfLine:" nil)
+  (define-line-start "moveToBeginningOfParagraphAndModifySelection:" t)
+  (define-line-start "moveToBeginningOfLineAndModifySelection:" t)
+  (define-line-start "moveToLeftEndOfLineAndModifySelection:" t))
+
 (define-listener-method ("moveUp:" :void)
     ((sender objc:objc-object-pointer))
   (unless (and (caret-on-first-input-line-p self pointer)

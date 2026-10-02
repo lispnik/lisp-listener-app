@@ -321,6 +321,25 @@ A step whose predicate has not held within its time fails."
          (lambda () (let ((text (self-test-text listener)))
                       (search (format nil "~%3~%") text)))
          nil)
+   (list "C-a goes to the start of the line, after the prompt"
+         (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (let ((view (listener-view-object listener))
+                 (pointer (listener-view listener)))
+             (replace-pending-input view pointer (format nil "(list 1~%      2)"))
+             (objc:invoke pointer "setSelectedRange:"
+                          (cons (+ (view-input-start view) 4) 0))
+             (objc:invoke pointer "listenerLineStart:" (cffi:null-pointer))
+             (unless (= (caret-index pointer) (view-input-start view))
+               (error "on the first line the caret is ~d past the prompt"
+                      (- (caret-index pointer) (view-input-start view))))
+             (objc:invoke pointer "setSelectedRange:"
+                          (cons (transcript-length pointer) 0))
+             (objc:invoke pointer "listenerLineStart:" (cffi:null-pointer))
+             (unless (= (caret-index pointer) (+ (view-input-start view) 8))
+               (error "on the second line the caret is ~d past the prompt"
+                      (- (caret-index pointer) (view-input-start view))))
+             (replace-pending-input view pointer ""))))
    (list "Tab completes multiple-value-b"
          (lambda () (at-top-level-prompt-p listener))
          (lambda ()

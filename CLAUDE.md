@@ -625,6 +625,15 @@ Each of these is a bug that actually happened here.
   of a second later, twelve times; `replace-canvas` leaves a canvas docked
   while its old sheet is still up.
 
+- **The start of the line is after the prompt.** C-a put the caret at the left
+  margin, in front of `CL-USER> `, where nothing can be typed. On the Mac C-a
+  is `-moveToBeginningOfParagraph:`, not `-moveToBeginningOfLine:` (that is
+  Home and ⌘←, with `-moveToLeftEndOfLine:`), and each has an
+  `…AndModifySelection:` twin for Shift: six selectors, all overridden, and
+  only for the input's first line -- every other line starts at the margin
+  and is super's. iOS claims C-a and ⌘← as key commands, and having claimed
+  them must do the whole job (`move-to-input-line-start`).
+
 - **UIKit presents only from the top of the stack.** Asked to present from a
   controller that is already presenting, it logs a warning and does nothing: an
   error in a form that had just drawn, with the canvas's sheet up, would have

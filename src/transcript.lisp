@@ -267,6 +267,38 @@ Deleting the characters rather than assigning a fresh empty attributed string:
     (and (>= caret (view-input-start view))
          (not (find #\Newline (transcript-substring pointer caret (- end caret)))))))
 
+(defun input-line-start (view pointer)
+  "Where the line of input the caret is on begins, as an index into the text
+storage: just after the prompt for the first line, just after the newline for
+any other.  NIL when the caret is above the input, in the transcript."
+  (let ((start (view-input-start view))
+        (caret (caret-index pointer)))
+    (when (>= caret start)
+      (let* ((before (transcript-substring pointer start (- caret start)))
+             (newline (position #\Newline before :from-end t)))
+        (if newline
+            (+ start (utf-16-length (subseq before 0 (1+ newline))))
+            start)))))
+
+(defun move-to-input-line-start (view pointer &key extend)
+  "Put the caret at the start of its line of input -- after the prompt, not
+before it -- or, with EXTEND, stretch the selection back to there.  True if the
+caret was in the input and so this was done.
+
+What C-a and Home mean in a listener.  The text view's own idea of the start
+of the line is the left margin, which on the first line is in front of
+`CL-USER> ': somewhere nothing can be typed, a prompt's width from where the
+form begins."
+  (let ((line-start (input-line-start view pointer)))
+    (when line-start
+      (let ((range (objc:invoke pointer "selectedRange")))
+        (objc:invoke pointer "setSelectedRange:"
+                     (if extend
+                         (cons line-start (- (+ (car range) (cdr range)) line-start))
+                         (cons line-start 0))))
+      (objc:invoke pointer "scrollRangeToVisible:" (cons line-start 0))
+      t)))
+
 (defun recall-history (view pointer direction)
   "Put the previous (DIRECTION -1) or next (1) history entry in the input
 region.  Returns T when it did, NIL to let NSTextView move the caret instead --

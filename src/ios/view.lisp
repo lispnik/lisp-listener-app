@@ -279,6 +279,13 @@ time: a pointer made at load time would not survive into the app.")
                                           +ui-key-modifier-command+)
                              (key-command "," "listenerSettings:"
                                           +ui-key-modifier-command+)
+                             ;; The start of the line, which is after the
+                             ;; prompt: C-a, and ⌘←.
+                             (key-command "a" "listenerLineStart:"
+                                          +ui-key-modifier-control+)
+                             (key-command (%ns-string-constant "UIKeyInputLeftArrow")
+                                          "listenerLineStart:"
+                                          +ui-key-modifier-command+)
                              ;; The size of the type.  ⌘= as well as ⌘+, which
                              ;; is where + is without Shift.
                              (key-command "+" "listenerBigger:"
@@ -368,6 +375,12 @@ key in that position on a keyboard attached to an iPad."
 ;;; Defined in files that load after this one.
 (declaim (ftype function show-open-picker show-settings-sheet
                 note-canvas-room replace-canvas))
+
+;;; Claiming the key means doing all of its job: on any line of the input this
+;;; goes to that line's start, and on the first that is after the prompt.  Up
+;;; in the transcript there is nothing to edit and it does nothing.
+(define-listener-method ("listenerLineStart:" :void) ((sender objc:objc-object-pointer))
+  (move-to-input-line-start self pointer))
 
 (define-listener-method ("listenerSettings:" :void) ((sender objc:objc-object-pointer))
   (show-settings-sheet *listener*))

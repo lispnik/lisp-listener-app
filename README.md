@@ -98,6 +98,7 @@ is involved: nothing is photographed off the screen.
   operator takes a body is asked of the running image, so your own macros
   indent too.
 - **Tab** completes the symbol before the caret, from the listener's package.
+- **C-a**, Home and ⌘← go to the start of the line, which is after the prompt.
 - **↑ and ↓** walk the history, and **⌘R** searches all of it: type to narrow,
   and the form you choose goes back at the prompt to edit. The history is kept
   between launches.
