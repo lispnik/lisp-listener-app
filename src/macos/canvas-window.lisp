@@ -63,6 +63,47 @@ time, like everything foreign: NIL is what a dumped core starts with.")
           (canvas-push-key (canvas-key-for-character (char characters 0)))))
     (error (condition) (note "canvas keyDown: ~a" condition))))
 
+;;; The mouse is the canvas's pointer: (pointer) answers where it is and
+;;; whether the button is down, and a press is the key :CLICK.  Positions are
+;;; the view's own, which is flipped like the painter's.
+(defun canvas-mouse-event (pointer event phase)
+  (let ((point (objc:invoke pointer "convertPoint:fromView:"
+                            (objc:invoke event "locationInWindow") nil))
+        (bounds (objc:invoke pointer "bounds")))
+    (canvas-pointer-event phase (aref point 0) (aref point 1)
+                          (aref bounds 2) (aref bounds 3))))
+
+(objc:define-objc-method ("mouseDown:" :void)
+    ((self canvas-view pointer) (event objc:objc-object-pointer))
+  (handler-case (canvas-mouse-event pointer event :down)
+    (error (condition) (note "canvas mouseDown: ~a" condition))))
+
+(objc:define-objc-method ("mouseDragged:" :void)
+    ((self canvas-view pointer) (event objc:objc-object-pointer))
+  (handler-case (canvas-mouse-event pointer event :move)
+    (error (condition) (note "canvas mouseDragged: ~a" condition))))
+
+;;; Without a button down, too: (pointer) follows the mouse.  AppKit sends
+;;; -mouseMoved: only to a view with a tracking area that asks for it; see
+;;; BUILD-CANVAS-WINDOW.  :MOVE keeps whatever "down" was, which here is up.
+(objc:define-objc-method ("mouseMoved:" :void)
+    ((self canvas-view pointer) (event objc:objc-object-pointer))
+  (handler-case (canvas-mouse-event pointer event :move)
+    (error (condition) (note "canvas mouseMoved: ~a" condition))))
+
+(objc:define-objc-method ("mouseUp:" :void)
+    ((self canvas-view pointer) (event objc:objc-object-pointer))
+  (handler-case (canvas-mouse-event pointer event :up)
+    (error (condition) (note "canvas mouseUp: ~a" condition))))
+
+;;; The click that brings the canvas's window forward is a click on the canvas
+;;; as well: drawing shows the window without making it key, so the first
+;;; press would otherwise be spent on waking it.
+(objc:define-objc-method ("acceptsFirstMouse:" objc:objc-bool)
+    ((self canvas-view) (event objc:objc-object-pointer))
+  (declare (ignorable event))
+  t)
+
 ;;; The view is its window's delegate too, to hear that it was closed.
 (objc:define-objc-method ("windowWillClose:" :void)
     ((self canvas-view) (notification objc:objc-object-pointer))
@@ -109,7 +150,19 @@ room; against the screen's right edge if it has not."
     (objc:invoke window "setContentView:" view)
     (objc:invoke window "setInitialFirstResponder:" view)
     (objc:invoke window "setDelegate:" view)
-    (place-canvas-window window)
+    ;; For -mouseMoved:.  NSTrackingMouseMoved (2); NSTrackingActiveAlways
+    ;; (#x80), because drawing shows this window without making it key, and a
+    ;; program following the mouse should not need a click first; and
+    ;; NSTrackingInVisibleRect (#x200), so that the area is the view at any size.
+    (let ((area (objc:invoke (objc:invoke "NSTrackingArea" "alloc")
+                             "initWithRect:options:owner:userInfo:"
+                             frame (logior #x02 #x80 #x200) view nil)))
+      (objc:invoke view "addTrackingArea:" area)
+      (objc:release area))
+    ;; Where it was last time, if that is remembered and still on a screen.
+    (unless (and *reopen-windows*
+                 (set-window-frame window (remembered :canvas)))
+      (place-canvas-window window))
     (setf *canvas-view* object
           *canvas-window* window)))
 
@@ -144,3 +197,32 @@ what a game wants; without, it comes forward and the prompt keeps the keys."
   (show-canvas)
   (objc:invoke (canvas-view-pointer) "setNeedsDisplay:" t)
   t)
+
+(defun documents-directory ()
+  "Where (save \"name.png\") puts a file that names no directory: ~/Pictures.
+Not the Desktop or Documents, which macOS asks permission for."
+  (merge-pathnames "Pictures/" (user-homedir-pathname)))
+
+(defun save-canvas-png (path)
+  "Write the canvas, as its view paints it, to PATH.  Thread 1.
+
+The view draws itself into a bitmap, as the screenshots do, so the window need
+not be on screen -- nor ever have been: it is made here if it was not."
+  (unless (live-pointer-p *canvas-window*)
+    (build-canvas-window))
+  (let* ((view (canvas-view-pointer))
+         (bounds (objc:invoke view "bounds"))
+         (representation (objc:invoke view "bitmapImageRepForCachingDisplayInRect:" bounds)))
+    (objc:invoke view "cacheDisplayInRect:toBitmapImageRep:" bounds representation)
+    (unless (objc:invoke-bool
+             (objc:invoke representation "representationUsingType:properties:"
+                          +png-file-type+ (objc:invoke "NSDictionary" "dictionary"))
+             "writeToFile:atomically:" path t)
+      (error "The canvas could not be written to ~a." path))
+    path))
+
+(defun remember-canvas-window ()
+  "Record where the canvas's window is, if there is one.  Not saved here:
+REMEMBER-WINDOWS writes the file once for everything."
+  (when (live-pointer-p *canvas-window*)
+    (setf (getf *remembered* :canvas) (window-frame-list *canvas-window*))))

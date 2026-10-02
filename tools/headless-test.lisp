@@ -54,13 +54,13 @@
                           "history" "sexp" "paredit" "keymap" "indent" "transcript"
                           "completion" "paren-highlight" "paredit-view" "history-search"
                           "streams" "config"
-                          "restarts" "files" "canvas" "examples" "repl")
+                          "restarts" "preferences" "files" "canvas" "examples" "repl")
                         #+sbcl '("macos/view" "macos/window" "macos/restarts-panel"
                                  "macos/history-panel" "macos/canvas-window"
-                                 "macos/screenshot"
+                                 "macos/preferences-window" "macos/screenshot"
                                  "macos/app")
                         #+ecl '("ios/view" "ios/restarts-sheet" "ios/history-sheet"
-                                "ios/canvas-sheet" "ios/app")))
+                                "ios/canvas-sheet" "ios/settings-sheet" "ios/app")))
     (load (merge-pathnames (format nil "src/~a.lisp" name) *root*)
           :external-format :utf-8)))
 
@@ -1087,6 +1087,45 @@ bound away from the front end's own -- a test has no business writing into
   (canvas-push-key #\a)
   (check (and (eq (canvas:key) :left) (eql (canvas:key) #\a) (null (canvas:key)))
          "keys come back in the order pressed, and NIL when there are none")
+  ;; The pointer: a point in the view, turned into the canvas's own.
+  (canvas-pointer-event :down 300 50 400 200)
+  (check (equal '(100d0 50d0 t) (multiple-value-list (canvas:pointer)))
+         "a press at the view's (300, 50) is the canvas's (100, 50), down")
+  (canvas-pointer-event :move 200 100 400 200)
+  (canvas-pointer-event :up 200 100 400 200)
+  (check (equal '(0d0 0d0 nil) (multiple-value-list (canvas:pointer)))
+         "and lifted in the middle it is (0, 0), up")
+  (check (and (eq (canvas:key) :click) (null (canvas:key)))
+         "the press was also the key :click, once")
+  ;; Saved: SVG is all in the core.  PNG wants a view, and says so.
+  (canvas:clear)
+  (canvas:color :red)
+  (canvas:line 0 0 10 10)
+  (canvas:dot 0 0 5)
+  (canvas:box -10 -10 4 4)
+  (canvas:text 0 20 "a < b" 8)
+  (let* ((dir (merge-pathnames (format nil "lisp-listener-canvas-~d/" (random 1000000))
+                               (uiop:temporary-directory)))
+         (path (merge-pathnames "drawing.svg" dir)))
+    (unwind-protect
+         (let ((svg (progn (canvas:save path) (uiop:read-file-string path))))
+           (check (and (search "<svg" svg) (search "viewBox=\"-100 -100 200 200\"" svg))
+                  "(save \"x.svg\") writes an SVG document, in the canvas's own units")
+           (check (and (search "x2=\"10.00\" y2=\"-10.00\"" svg)
+                       (search "stroke=\"rgb(255,69,59)\"" svg))
+                  "a line, with y turned over and its colour")
+           (check (and (search "<ellipse cx=\"0.00\" cy=\"0.00\" rx=\"5.00\"" svg)
+                       (search "<rect x=\"-10.00\" y=\"6.00\" width=\"4.00\"" svg))
+                  "a dot and a box")
+           (check (search ">a &lt; b</text>" svg) "and text, escaped")
+           (check (handler-case (progn (canvas:save (merge-pathnames "drawing.png" dir)) nil)
+                    (error () t))
+                  "a PNG needs a window, and with none says so")
+           (check (handler-case (progn (canvas:save (merge-pathnames "drawing.gif" dir)) nil)
+                    (error () t))
+                  "and any other type is refused"))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore)))
+  (canvas:color :white)
   (check (and (eq (canvas-key-for-character (code-char #xF700)) :up)
               (eq (canvas-key-for-character #\Space) :space)
               (eql (canvas-key-for-character #\q) #\q))
@@ -1095,13 +1134,13 @@ bound away from the front end's own -- a test has no business writing into
 
 (defcase case-examples "The examples: in the image, listed, and every one runs."
   (install-user-vocabulary)
-  (check (and (= 6 (length *examples*))
+  (check (and (= 12 (length *examples*))
               (every (lambda (entry)
                        (and (plusp (length (example-title entry)))
                             (plusp (length (example-description entry)))
                             (search "(" (example-text entry))))
                      *examples*))
-         "six of them, each with a title, a description and its source")
+         "twelve of them, each with a title, a description and its source")
   (check (string= (example-form :spiral) "(example \"spiral\")")
          "the form that runs one, from its name in any case")
   (say listener "(examples)")
@@ -1129,9 +1168,54 @@ bound away from the front end's own -- a test has no business writing into
   (run-example-in-listener listener "hello")
   (say listener ":after-hello")
   (check-text listener ":AFTER-HELLO" "the menu's item types the form at the prompt")
+  ;; With no window to put it in, EXAMPLE-EDIT prints.
+  (say listener "(example-edit \"hello\")")
+  (check-text listener "(circle 0 0 60)" "(example-edit) falls back to printing with no view")
   (say listener "(example \"nope\")")
   (check-text listener "There is no example called nope" "an unknown name says what there is")
   (canvas:clear))
+
+(defcase case-preferences "Preferences: set, written down, and read back."
+  (let* ((dir (merge-pathnames (format nil "lisp-listener-prefs-~d/" (random 1000000))
+                               (uiop:temporary-directory)))
+         (*history-directory* dir)
+         (paredit *paredit-enabled*)
+         (size *font-size*)
+         (*remembered* '()))
+    (unwind-protect
+         (progn
+           (check (null (read-preferences)) "with no file there is nothing to read")
+           (check (zerop (load-preferences)) "and nothing is changed")
+           (setf (preference :paredit) nil)
+           (check (and (null *paredit-enabled*) (probe-file (preferences-file)))
+                  "setting one changes its variable and writes the file")
+           (setf (preference :font-size) 16)
+           (check (eql *font-size* 16d0) "a size is kept as a double")
+           (check (handler-case (progn (setf (preference :font-size) 400) nil) (error () t))
+                  "a size out of range is refused")
+           (check (handler-case (progn (preference :no-such) nil) (error () t))
+                  "and so is a preference there is not")
+           (setf (remembered :windows) '((10d0 20d0 760d0 520d0)))
+           ;; As a fresh launch would find things.
+           (setf *paredit-enabled* t *font-size* 13d0 *remembered* '())
+           (check (= (length *preferences*) (load-preferences))
+                  "a fresh launch reads every setting back")
+           (check (and (null *paredit-enabled*) (eql *font-size* 16d0))
+                  "to what was set")
+           (check (equal (remembered :windows) '((10d0 20d0 760d0 520d0)))
+                  "and what the application remembered comes back with them")
+           ;; A file somebody broke is the defaults, not an error.
+           (with-open-file (out (preferences-file) :direction :output :if-exists :supersede)
+             (write-string "(:font-size \"big\" :paredit #.(error \"no\")" out))
+           (setf *font-size* 13d0)
+           (check (and (zerop (load-preferences)) (eql *font-size* 13d0))
+                  "a broken file changes nothing and signals nothing")
+           (with-open-file (out (preferences-file) :direction :output :if-exists :supersede)
+             (write-string "(:font-size \"big\" :paredit t)" out))
+           (check (and (= 1 (load-preferences)) (eql *font-size* 13d0) *paredit-enabled*)
+                  "a value of the wrong kind is skipped and the rest are taken"))
+      (setf *paredit-enabled* paredit *font-size* size)
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -1146,7 +1230,7 @@ bound away from the front end's own -- a test has no business writing into
                 case-sexp case-paredit case-indent case-keymap case-init-file
                 case-history-search
                 case-prompt-is-recorded
-                case-canvas case-examples))
+                case-canvas case-examples case-preferences))
   (funcall case))
 
 (format t "~&~%headless-test: ~d check~:p, ~d failure~:p~%" *checks* *failures*)

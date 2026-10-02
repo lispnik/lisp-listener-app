@@ -142,8 +142,8 @@ Returns (VALUES POINTER OBJECT)."
 
 (defun make-key-bar (object)
   "The row of keys above the on-screen keyboard: Tab, Esc, the arrows, Hist,
-Clear and Stop, each doing what its hardware key does, and Try, which lists
-the examples.
+Clear and Stop, each doing what its hardware key does; Try, which lists the
+examples; Open, which loads a file from the Files app; and ⚙, for Settings.
 
 A frame rather than constraints: an input accessory view is sized by the
 keyboard from its frame's height, and stretched across from its autoresizing
@@ -163,11 +163,11 @@ mask."
     (uikit:pin stack "bottomAnchor" bar "bottomAnchor")
     (flet ((key (title function)
              (let ((button (uikit:system-button title)))
-               ;; Eight keys across a phone leave each about 46 points, and
+               ;; Nine keys across a phone leave each about 42 points, and
                ;; "Clear" at 16 came out as "C…ar": smaller, and allowed to
                ;; shrink further on a narrower phone rather than lose letters.
                (let ((label (objc:invoke button "titleLabel")))
-                 (objc:invoke label "setFont:" (uikit:mono-font 14))
+                 (objc:invoke label "setFont:" (uikit:mono-font 13))
                  (objc:invoke label "setAdjustsFontSizeToFitWidth:" t)
                  (objc:invoke label "setMinimumScaleFactor:" 0.7d0))
                (uikit:on-tap button
@@ -183,8 +183,10 @@ mask."
       (key "↓" (lambda () (key-arrow object 1)))
       (key "Hist" (lambda () (open-history-popup *listener*)))
       (key "Try" (lambda () (open-examples-popup *listener*)))
+      (key "Open" (lambda () (show-open-picker *listener*)))
       (key "Clear" (lambda () (clear-transcript *listener*)))
-      (key "Stop" (lambda () (abort-evaluation *listener*))))
+      (key "Stop" (lambda () (abort-evaluation *listener*)))
+      (key "⚙" (lambda () (show-settings-sheet *listener*))))
     bar))
 
 ;;; What the keys do ------------------------------------------------------------
@@ -273,6 +275,18 @@ time: a pointer made at load time would not survive into the app.")
                                           +ui-key-modifier-command+)
                              (key-command "r" "listenerHistory:"
                                           +ui-key-modifier-command+)
+                             (key-command "o" "listenerOpen:"
+                                          +ui-key-modifier-command+)
+                             (key-command "," "listenerSettings:"
+                                          +ui-key-modifier-command+)
+                             ;; The size of the type.  ⌘= as well as ⌘+, which
+                             ;; is where + is without Shift.
+                             (key-command "+" "listenerBigger:"
+                                          +ui-key-modifier-command+)
+                             (key-command "=" "listenerBigger:"
+                                          +ui-key-modifier-command+)
+                             (key-command "-" "listenerSmaller:"
+                                          +ui-key-modifier-command+)
                              ;; Option-Return, as on the Mac: a new line,
                              ;; indented, and nothing submitted.
                              (key-command (string #\Return) "listenerNewline:"
@@ -350,6 +364,38 @@ key in that position on a keyboard attached to an iPad."
 
 (define-listener-method ("listenerHistory:" :void) ((sender objc:objc-object-pointer))
   (open-history-popup *listener*))
+
+;;; Defined in files that load after this one.
+(declaim (ftype function show-open-picker show-settings-sheet
+                note-canvas-room replace-canvas))
+
+(define-listener-method ("listenerSettings:" :void) ((sender objc:objc-object-pointer))
+  (show-settings-sheet *listener*))
+
+;;; The transcript is laid out whenever the window changes size, which is the
+;;; one event that says a docked canvas may have lost its room, or a sheet
+;;; gained some.  Super first: this only watches.
+(define-listener-method ("layoutSubviews" :void) ()
+  (objc:invoke (objc:current-super) "layoutSubviews")
+  (note-canvas-room pointer))
+
+(define-listener-method ("listenerPlaceCanvas" :void) ()
+  (replace-canvas))
+
+;;; A second go at showing the canvas, when the first did not take; see
+;;; PRESENT-CANVAS-SHEET.  Not if the person has closed it since.
+(define-listener-method ("listenerShowCanvas" :void) ()
+  (unless *canvas-dismissed*
+    (redisplay-canvas)))
+
+(define-listener-method ("listenerOpen:" :void) ((sender objc:objc-object-pointer))
+  (show-open-picker *listener*))
+
+(define-listener-method ("listenerBigger:" :void) ((sender objc:objc-object-pointer))
+  (change-font-size 1))
+
+(define-listener-method ("listenerSmaller:" :void) ((sender objc:objc-object-pointer))
+  (change-font-size -1))
 
 ;;; Defined in restarts-sheet.lisp, which loads after this file.
 (declaim (ftype function restarts-table-row-count))

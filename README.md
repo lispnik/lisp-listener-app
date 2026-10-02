@@ -104,14 +104,17 @@ is involved: nothing is photographed off the screen.
 
 ### A canvas, and some examples
 
-![A spiral, a tree and a rose curve, each drawn from the prompt](doc/canvas.png)
+![A circle and a spiral typed at the prompt, then the tree, the Mandelbrot set and a game of Snake from the Examples menu](doc/canvas.gif)
 
 There is a canvas to draw on. `(circle 0 0 50)` at the prompt opens it — a
-second window on the Mac, a sheet on a phone — and draws a circle in the middle:
-the canvas runs from -100 to 100 each way, with y going up.
+second window on the Mac, a pane beside the transcript on an iPad, a sheet on a
+phone — and draws a circle in the middle: the canvas runs from -100 to 100 each
+way, with y going up.
+
+![A spiral, a tree and a rose curve, each drawn from the prompt](doc/canvas.png)
 
 ```lisp
-(dotimes (i 140)            ; the picture on the left
+(dotimes (i 140)            ; the spiral
   (hue (/ i 140))
   (forward i)
   (right 89))
@@ -126,22 +129,38 @@ the canvas runs from -100 to 100 each way, with y going up.
 | a turtle | `forward` `back` `left` `right` `pen-up` `pen-down` `home` `move-to` |
 | animation | `(frame ...)` draws one whole picture in place of the last, and `(wait 0.1)` pauses |
 | games | `(key)` answers the next key pressed in the canvas — `:left`, `:space`, `#\q` — or `nil` |
-| the canvas | `clear` `background` `show` `hide` |
+| the mouse, or a finger | `(pointer)` answers where it is and whether it is down — a mouse is followed with its button up, too — and a press is also the key `:click` |
+| the canvas | `clear` `background` `show` `hide`, and `(save "name.png")` or `"name.svg"` to keep it |
 
 They are ordinary functions in a package called `canvas`, imported into
 `cl-user` when a listener starts, and each has a docstring.
 
-Six short programs come with it, in the **Examples** menu (the **Try** key on a
-phone): a face, the spiral, a rose curve, a tree that is made of smaller trees,
-Conway's Life, and Snake. `(examples)` lists them, `(example "snake")` runs one,
-and `(example-source "snake")` prints it to read — none is longer than a
-screen. Running one leaves what it defined, so after the spiral there is a
-`spiral` to call with an angle of your own: `(spiral 121)`.
+Twelve short programs come with it, in the **Examples** menu (the **Try** key
+on a phone): a face, the spiral, a rose curve, a tree made of smaller trees,
+Sierpinski's triangle from a coin with three sides, the Mandelbrot set, a
+clock, bouncing balls, Conway's Life, a doodle to draw with the mouse or a
+finger, Snake and Pong. `(examples)` lists them, `(example "snake")` runs one,
+`(example-source "snake")` prints it to read — none is longer than a screen —
+and `(example-edit "snake")` puts it at the prompt to change. Running one
+leaves what it defined, so after the spiral there is a `spiral` to call with an
+angle of your own: `(spiral 121)`.
 
 Drawing happens on the listener thread and only ever makes a list; thread 1
 paints it. So a drawing that goes wrong lands in the debugger like any other
 error, Interrupt stops an animation, and `make test` runs every example with
 no window anywhere.
+
+### Settings
+
+**Settings…** (⌘,) has the switches worth a checkbox — paredit, the paren tint,
+the indenter, the docked debugger, whether to reopen windows — and the size of
+the type, which **View ▸ Bigger** (⌘+) and **Smaller** (⌘-) also change. Each
+takes effect at once and is kept, in `preferences.lisp-expr` beside the
+history; `(setf (lisp-listener:preference :font-size) 16)` is the same thing
+from the prompt. `init.lisp` is loaded afterwards and so has the last word.
+
+The application remembers its windows: quit with two listeners and the canvas
+open, and that is what comes back, where they were.
 
 ## Requirements
 
@@ -264,10 +283,11 @@ make run-ios        # build, install and launch in the booted simulator
 ```
 
 The transcript is a `UITextView`. Above the on-screen keyboard is a bar of the
-keys a phone keyboard lacks -- Tab, Esc, ↑ and ↓, Hist, Try, Clear and Stop -- and with a hardware
-keyboard the same keys work as they do on the Mac: Tab completes, ↑ and ↓ walk
-the history, Option-Return indents a new line, ⌘. stops a form, ⌘K clears,
-⌘R searches the history.
+keys a phone keyboard lacks -- Tab, Esc, ↑ and ↓, Hist, Try, Open, Clear, Stop
+and ⚙ for Settings -- and with a hardware keyboard the same keys work as they do on the Mac:
+Tab completes, ↑ and ↓ walk the history, Option-Return indents a new line, ⌘.
+stops a form, ⌘K clears, ⌘R searches the history, ⌘O opens a file, ⌘, is
+Settings, and ⌘+ and ⌘- change the size of the type.
 
 An error brings up the restarts as a **sheet**: each restart's report, its
 number and name under it, and the frames below. Tap a row, or press ⌘ and its
@@ -276,17 +296,27 @@ returns to the top level.
 
 A `.lisp` file in the Files app, or in a share sheet, offers **Lisp Listener**:
 opening it loads it, with the `(load "…")` typed at the prompt as File ▸ Open…
-does on the Mac. The app's own folder is in Files under On My iPhone, so a
-file put there is `(load "name.lisp")` away, and `init.lisp` can be edited.
+does on the Mac. **Open** on the key bar is the same thing from inside: the
+system's document picker. The app's own folder is in Files under On My iPhone,
+so a file put there is `(load "name.lisp")` away, `init.lisp` can be edited,
+and a picture saved with `(save "name.png")` is there to share.
 
-The canvas is a sheet too, at half height so the transcript stays in view, with
-a row of arrows under it for the keys a game reads. **Try** lists the examples.
+The canvas goes where there is room for it. On an iPad, or a big phone on its
+side, it is **docked** beside the transcript, which keeps the keyboard: type a
+form and watch what it draws. On a phone it is a sheet at half height, so the
+transcript stays in view, and it moves from one to the other if the window's
+width changes under it. Either way it takes a finger -- `(pointer)` -- and
+has a row of arrows under it for the keys a game reads. **Try** lists the
+examples, and **⚙** is Settings: the same switches as on the Mac, and the size
+of the type.
 
 The app checks itself: `SIMCTL_CHILD_LISP_LISTENER_SELF_TEST=4 xcrun simctl
 launch <device> org.lispnik.lisp-listener` drives a session through typing,
 paredit, completion, the history, an error, the sheet, a value, an example, a
-game of snake and a form that never returns, holding four seconds on each screen worth a look, and writes
+game of snake, a picture saved, a file opened and a form that never returns, holding four seconds on each screen worth a look, and writes
 `selftest: PASS` to `Documents/console.log` in the app's container.
+`make test-ios` does that in an iPhone simulator and an iPad one and reports
+both, and `make ios-demo` records it in each as a captioned video: the iPad is not a big phone, and has shown a crash the iPhone never did.
 
 ## How it works
 
@@ -401,7 +431,8 @@ which is what `.github/workflows/macos.yml` is for: it builds SBCL
 `--with-sb-safepoint`, verifies the build really has them, runs the listener's
 self-test, builds `Lisp Listener.app` and runs the bundle's self-test, on both
 arm64 and Intel. `.github/workflows/check.yml` runs the three above on Linux in
-seconds.
+seconds, and `.github/workflows/ios.yml` cross-compiles the iOS app with ECL
+and runs its self-test in an iPhone and an iPad simulator.
 
 If you change any of the three, break something on purpose and confirm it goes
 red — "no offenders" is also what an empty scan says.

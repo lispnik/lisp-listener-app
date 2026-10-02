@@ -44,7 +44,9 @@
            #:retain #:release #:autorelease #:retain-count #:with-autorelease-pool
            #:ns-string-to-string #:string-to-ns-string
            #:standard-objc-object #:define-objc-class #:define-objc-method
-           #:define-objc-class-method #:objc-object-from-pointer))
+           #:define-objc-class-method #:objc-object-from-pointer
+           #:define-objc-block-type #:make-objc-block #:free-objc-block
+           #:with-objc-block))
 
 (defpackage #:cocoa
   (:use #:cl)
@@ -55,8 +57,8 @@
 (defpackage #:uikit
   (:use #:cl)
   (:export #:new #:system-button #:key-window #:root-controller #:root-view
-           #:font #:bold-font #:mono-font #:pin #:fix #:on-tap #:after-every
-           #:keep #:unkeep))
+           #:font #:bold-font #:mono-font #:pin #:fix #:on-tap #:action-target
+           #:after-every #:keep #:unkeep))
 
 (defpackage #:objc.runloop
   (:use #:cl)
@@ -164,6 +166,12 @@
 (defun string-to-ns-string (string &optional autoreleasep)
   (declare (ignore string autoreleasep)) nil)
 (defun objc-object-from-pointer (pointer) (declare (ignore pointer)) nil)
+(defmacro define-objc-block-type (name result-type arg-types)
+  (declare (ignore result-type arg-types)) `',name)
+(defun make-objc-block (type function) (declare (ignore type function)) nil)
+(defun free-objc-block (block) (declare (ignore block)) nil)
+(defmacro with-objc-block ((var type function) &body body)
+  `(let ((,var (make-objc-block ,type ,function))) ,@body))
 (defmacro with-autorelease-pool ((&rest options) &body body)
   (declare (ignore options)) `(progn ,@body))
 (defmacro current-super ()
@@ -265,6 +273,7 @@
   (declare (ignore view name other other-name constant)) nil)
 (defun fix (view name constant) (declare (ignore view name constant)) nil)
 (defun on-tap (control function) (declare (ignore function)) control)
+(defun action-target (function) (declare (ignore function)) nil)
 (defun after-every (seconds function &key (repeats t))
   (declare (ignore seconds function repeats)) nil)
 (defun keep (object) object)

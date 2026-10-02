@@ -59,6 +59,14 @@
     (write-window-png window path)
     (when (history-popup-visible-p listener)
       (demo-overlay path (listener-history-panel listener) window))
+    ;; The canvas is a window of its own too; for the demo it sits over the
+    ;; listener's lower right corner, and is composited in where it sits.
+    (when (canvas-visible-p)
+      (demo-overlay path *canvas-window* window))
+    ;; And so is Settings, which the demo likewise puts over the listener.
+    (when (and (live-pointer-p *preferences-window*)
+               (objc:invoke-bool *preferences-window* "isVisible"))
+      (demo-overlay path *preferences-window* window))
     (push (cons path seconds) *demo-frames*)
     (incf *demo-clock* seconds)))
 
@@ -108,6 +116,158 @@
 
 (defun demo-press (characters)
   (press-key-equivalent (listener-window *listener*) characters))
+
+(defparameter *demo-canvas-size* 330d0)
+
+(defun demo-place-canvas (window)
+  "Make the canvas's window now, small and over the listener's lower right
+corner, so that the first shape drawn finds it where the frames expect it."
+  (unless (live-pointer-p *canvas-window*)
+    (build-canvas-window))
+  (let ((frame (objc:invoke window "frame"))
+        (size *demo-canvas-size*))
+    (objc:invoke *canvas-window* "setFrame:display:"
+                 (objc:invoke *canvas-window* "frameRectForContentRect:"
+                              (vector (- (+ (aref frame 0) (aref frame 2)) size 16d0)
+                                      (+ (aref frame 1) 16d0)
+                                      size size))
+                 t)))
+
+(defun demo-drawn (count what)
+  "Wait for COUNT shapes on the canvas, painted, and the prompt back."
+  (let ((paints *canvas-paints*))
+    (demo-expect (wait-for (lambda () (and (= count (length (canvas-contents)))
+                                           (canvas-visible-p)
+                                           (> *canvas-paints* paints)))
+                           :timeout 20)
+                 what))
+  (demo-at-prompt)
+  (pump-for 0.3d0))
+
+(defun demo-play-snake (listener)
+  "Play Snake with a script: a frame of video for each turn of the game, and a
+key at the turns that need one.  The game runs five times slower than it is
+shown, which is the time a photograph takes -- and when a photograph takes
+longer than that and a turn goes by unseen, the frame that is taken stands for
+both, and a key that was due is pressed late rather than never."
+  (let ((keys (list (cons 7 :up) (cons 12 :left) (cons 24 :down) (cons 36 :right)))
+        (start *canvas-frames*)
+        (seen 0))
+    (setf *canvas-time-scale* 5)
+    (run-example-in-listener listener "snake")
+    (unwind-protect
+         (loop
+           (demo-expect (wait-for (lambda ()
+                                    (or (> (- *canvas-frames* start) seen)
+                                        (waiting-at-top-level-p listener)))
+                                  :timeout 20)
+                        "the next turn of Snake")
+           (let ((now (- *canvas-frames* start)))
+             (when (= now seen)
+               (return))                  ; the prompt is back: game over
+             (loop while (and keys (>= now (car (first keys))))
+                   do (canvas-push-key (cdr (pop keys))))
+             (pump 0.05d0)
+             (demo-frame (* 0.15d0 (- now seen)))
+             (setf seen now)))
+      (setf *canvas-time-scale* 1))
+    (pump-for 0.3d0)
+    (demo-frame 2.4d0)))
+
+(defun demo-heart (&optional (count 60))
+  "A heart, as canvas points, for the demo's mouse to draw."
+  (loop for i from 0 to count
+        for a = (* 2 pi (/ i count))
+        collect (cons (* 4.6 16 (expt (sin a) 3))
+                      (+ 8 (* 4.6 (- (* 13 (cos a)) (* 5 (cos (* 2 a)))
+                                     (* 2 (cos (* 3 a))) (cos (* 4 a))))))))
+
+(defun demo-doodle (listener)
+  "The doodle example, with the mouse drawn for it: a press, a drag through
+each point of a heart, a release -- as events to the canvas's view, which is
+how AppKit would deliver them -- and a frame of video for each."
+  (run-example-in-listener listener "doodle")
+  (demo-expect (wait-for (lambda () (and (= 1 (length (canvas-contents)))
+                                         (canvas-visible-p)))
+                         :timeout 15)
+               "the doodle to start")
+  (pump-for 0.3d0)
+  (demo-frame 1.0d0)
+  (let* ((view (canvas-view-pointer))
+         (bounds (objc:invoke view "bounds"))
+         (cx (/ (aref bounds 2) 2)) (cy (/ (aref bounds 3) 2))
+         (unit (/ (min (aref bounds 2) (aref bounds 3)) 200))
+         (points (demo-heart)))
+    (flet ((event (type point)
+             (canvas-mouse-test-event type (+ cx (* unit (car point)))
+                                      (+ cy (* unit (cdr point))))))
+      (objc:invoke view "mouseDown:" (event 1 (first points)))
+      (dolist (point (rest points))
+        (let ((lines (length (canvas-contents))))
+          (objc:invoke view "mouseDragged:" (event 6 point))
+          ;; The doodle looks fifty times a second: wait for it to have seen
+          ;; this point, so that every one of them is a line.
+          (wait-for (lambda () (> (length (canvas-contents)) lines)) :timeout 2)
+          (demo-frame 0.05d0)))
+      (objc:invoke view "mouseUp:" (event 2 (first (last points))))))
+  ;; Escape is how a doodle is given up before its time.
+  (canvas-push-key :escape)
+  (demo-at-prompt)
+  (pump-for 0.3d0)
+  (demo-frame 2.4d0))
+
+(defun demo-settings (listener)
+  "Settings, and the size of the type from the View menu."
+  (let ((frame (objc:invoke (listener-window listener) "frame")))
+    (demo-expect (press-menu-item "Lisp Listener" "Settings…") "Settings…")
+    (objc:invoke *preferences-window* "setFrameTopLeftPoint:"
+                 (vector (+ (aref frame 0) 240d0)
+                         (- (+ (aref frame 1) (aref frame 3)) 110d0)))
+    (pump-for 0.3d0)
+    (demo-frame 2.0d0)
+    (dotimes (i 3)
+      (press-menu-item "View" "Bigger")
+      (pump 0.1d0)
+      (demo-frame 0.5d0))
+    (demo-frame 1.6d0)
+    (dotimes (i 3)
+      (press-menu-item "View" "Smaller")
+      (pump 0.1d0)
+      (demo-frame 0.3d0))
+    (hide-preferences-window)
+    (pump-for 0.2d0)
+    (demo-frame 0.8d0)))
+
+(defun demo-canvas (listener)
+  "The canvas, the examples and a game."
+  (demo-place-canvas (listener-window listener))
+  (demo-caption "There is a canvas to draw on: (circle 0 0 60) opens it")
+  (demo-type "(circle 0 0 60)")
+  (objc:invoke (demo-view) "insertNewline:" (cffi:null-pointer))
+  (demo-drawn 1 "a circle on the canvas")
+  (demo-frame 1.8d0)
+  (demo-caption "A turtle that walks a little further every time it turns")
+  (demo-type "(dotimes (i 140) (hue (/ i 140)) (forward i) (right 89))" :per-key 0.035d0)
+  (objc:invoke (demo-view) "insertNewline:" (cffi:null-pointer))
+  (demo-drawn 141 "the spiral")
+  (demo-frame 2.8d0)
+  (demo-caption "Twelve short examples come with it, in the Examples menu")
+  (run-example-in-listener listener "tree")
+  (demo-drawn 511 "the tree")
+  (demo-frame 2.4d0)
+  (run-example-in-listener listener "mandelbrot")
+  (demo-expect (wait-for (lambda () (and (> (length (canvas-contents)) 600)
+                                         (waiting-at-top-level-p listener)))
+                         :timeout 30)
+               "the Mandelbrot set")
+  (pump-for 0.4d0)
+  (demo-frame 2.8d0)
+  (demo-caption "(pointer) is the mouse: a doodle draws where it goes")
+  (demo-doodle listener)
+  (demo-caption "(frame ...) animates and (key) reads the arrows, so Snake is forty lines")
+  (demo-play-snake listener)
+  (hide-canvas)
+  (pump-for 0.3d0))
 
 (defun demo-write-lists ()
   "The ffmpeg concat list -- the last frame named twice, as ffmpeg wants -- and
@@ -191,12 +351,19 @@ the captions."
     (demo-pane-up) (demo-frame 2.6d0)
 
     (demo-caption "Each frame of the backtrace opens to show its local variables")
-    (let* ((items (getf (pane-views listener) :backtrace-items))
-           (outline (objc:invoke (getf (pane-views listener) :backtrace) "documentView"))
-           (frame (position-if (lambda (f) (search "AVERAGE" (backtrace-frame-line f)))
-                               (backtrace-items-frames items))))
-      (demo-expect frame "a frame for AVERAGE")
-      (objc:invoke outline "expandItem:" (aref (backtrace-items-roots items) frame)))
+    ;; Waited for, not just looked for.  One run in five stopped here, with
+    ;; the pane up and no frame for AVERAGE in it yet; why was not found, and
+    ;; waiting costs nothing when the frame is already there.
+    (flet ((average-frame ()
+             (let ((items (getf (pane-views listener) :backtrace-items)))
+               (and items
+                    (position-if (lambda (f) (search "AVERAGE" (backtrace-frame-line f)))
+                                 (backtrace-items-frames items))))))
+      (demo-expect (wait-for #'average-frame :timeout 10) "a frame for AVERAGE")
+      (objc:invoke (objc:invoke (getf (pane-views listener) :backtrace) "documentView")
+                   "expandItem:"
+                   (aref (backtrace-items-roots (getf (pane-views listener) :backtrace-items))
+                         (average-frame))))
     (pump-for 0.2d0) (demo-frame 2.6d0)
 
     (demo-caption "⌘ and a restart's number takes it -- typed at the prompt, where you can see it")
@@ -227,6 +394,11 @@ the captions."
                  "a second debugger level")
     (pump-for 0.4d0) (demo-frame 2.6d0)
     (demo-press "0") (demo-at-prompt) (pump-for 0.3d0) (demo-frame 1.8d0)
+
+    (demo-canvas listener)
+
+    (demo-caption "Settings… has the switches, and ⌘+ and ⌘- change the size of the type")
+    (demo-settings listener)
 
     (demo-caption "⌘K clears the transcript")
     (clear-transcript listener) (pump-for 0.3d0) (demo-frame 2.0d0)

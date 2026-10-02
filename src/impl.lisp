@@ -197,6 +197,9 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 ;; take it down; ask; and repaint it, showing it if need be.
                 canvas-toolkit show-canvas hide-canvas canvas-visible-p
                 redisplay-canvas
+                ;; ...write it to a PNG file; and the directory a file with no
+                ;; directory of its own is saved in.
+                save-canvas-png documents-directory
                 ;; LISTENER-TEXT-VIEW's slot accessors.  The class is the front
                 ;; end's -- its superclass is NSTextView or UITextView -- and
                 ;; the transcript in the core reads and writes its slots.

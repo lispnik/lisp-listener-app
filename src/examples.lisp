@@ -19,7 +19,9 @@
 (in-package #:lisp-listener)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defparameter *example-names* '("hello" "spiral" "rose" "tree" "life" "snake")
+  (defparameter *example-names*
+    '("hello" "spiral" "rose" "tree" "sierpinski" "mandelbrot"
+      "clock" "ball" "life" "doodle" "snake" "pong")
     "The examples, in the order the menu lists them.  A new one is a file in
 examples/, a name here, and a static file in lisp-listener.asd.")
 
@@ -84,9 +86,11 @@ that says what there is."
   "List the examples that came with the listener."
   (format t "~&")
   (dolist (entry *examples*)
-    (format t "  ~8a ~a~%" (example-name entry) (example-description entry)))
-  (format t "Run one with (example \"~a\"), and read it with (example-source \"~:*~a\").~%"
-          (example-name (second *examples*)))
+    (format t "  ~11a ~a~%" (example-name entry) (example-description entry)))
+  (let ((name (example-name (second *examples*))))
+    (format t "Run one with (example ~s), read it with (example-source ~s),~%~
+and put it at the prompt to change with (example-edit ~s).~%"
+            name name name))
   (values))
 
 (defun example-source (name)
@@ -109,6 +113,22 @@ to call with an angle of your own."
             until (eq form in)
             do (setf results (multiple-value-list (eval form)))))
     (values-list results)))
+
+(defun example-edit (name)
+  "Put the example NAME at the prompt, to change before it is run.
+
+The whole program lands in the input region, as a line of history does: edit
+it -- Option-Return starts a new line -- and Return runs what is there.  With
+no window to put it in, it is printed instead."
+  (let ((text (string-right-trim '(#\Newline #\Space) (example-text (find-example name))))
+        (listener *listener*))
+    (cond ((and listener (listener-view listener) *main-thread-target*)
+           ;; At once, though this form is still being evaluated: the input
+           ;; region is there to type ahead into, and the prompt this returns
+           ;; to is printed above whatever is in it.
+           (on-main-thread () (put-at-prompt listener text))
+           (values))
+          (t (example-source name)))))
 
 (defun run-example-in-listener (listener name)
   "Type (example \"NAME\") at LISTENER's prompt.  Thread 1: what the Examples

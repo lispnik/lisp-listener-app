@@ -6,6 +6,9 @@
 
 (defparameter +default-frame+ #(0d0 0d0 760d0 520d0))
 
+;;; Defined in files that load after this one.
+(declaim (ftype function new-listener hide-preferences-window remember-canvas-window))
+
 ;;; The view ------------------------------------------------------------------
 
 (defun make-listener-view (&optional (frame +default-frame+))
@@ -165,6 +168,9 @@ errors."
         (when listener
           ;; End of input, so a listener parked in READ stops rather than
           ;; waiting on a window that has gone.
+          ;; While it is still in the list: the last window to close is the
+          ;; one a relaunch should put back.
+          (remember-windows)
           (queue-set-eof (listener-input listener))
           (abort-evaluation listener)
           (unregister-listener listener)
@@ -175,8 +181,79 @@ errors."
         ;; it would be an application with nothing in it to type at.
         (unless *listeners*
           (hide-canvas)
+          (hide-preferences-window)
           (stop-run-loop-soon)))
     (error (condition) (note "windowWillClose: ~a" condition))))
+
+;;; Where the windows were ------------------------------------------------------
+;;;
+;;; Remembered in the preferences file (src/preferences.lisp), not by AppKit's
+;;; frame autosave: that keeps its record in the user defaults of whatever
+;;; process this is, so a driven run -- the screenshots, the demo -- would be
+;;; resized by the last person to drag a window, and would resize theirs.
+
+(defun window-frame-list (window)
+  (map 'list (lambda (number) (float number 1d0)) (objc:invoke window "frame")))
+
+(defun frame-on-a-screen-p (frame)
+  "Whether FRAME, (x y width height), overlaps a screen that is attached now by
+enough to be found and dragged: a window remembered on a display since
+unplugged must not come back out of reach."
+  (destructuring-bind (x y width height) frame
+    (let ((screens (objc:invoke "NSScreen" "screens")))
+      (loop for i from 0 below (objc:invoke screens "count")
+            for visible = (objc:invoke (objc:invoke screens "objectAtIndex:" i)
+                                       "visibleFrame")
+            thereis (and (> (- (min (+ x width) (+ (aref visible 0) (aref visible 2)))
+                               (max x (aref visible 0)))
+                            80)
+                         (> (- (min (+ y height) (+ (aref visible 1) (aref visible 3)))
+                               (max y (aref visible 1)))
+                            80))))))
+
+(defun sound-frame-p (frame)
+  (and (listp frame) (= 4 (length frame)) (every #'realp frame)
+       (>= (third frame) 200) (>= (fourth frame) 120)))
+
+(defun set-window-frame (window frame)
+  "Put WINDOW at FRAME, a remembered (x y width height).  True if it was sound
+and on a screen, and so was done."
+  (when (and (sound-frame-p frame) (frame-on-a-screen-p frame))
+    (objc:invoke window "setFrame:display:"
+                 (map 'vector (lambda (number) (float number 1d0)) frame) t)
+    t))
+
+(defun remember-windows ()
+  "Record where every listener's window is, oldest first, and the canvas's.
+Thread 1.  With no listener left there is nothing to record, and what was
+recorded as the last one closed stands."
+  (when *listeners*
+    (handler-case
+        (progn
+          (setf (getf *remembered* :windows)
+                (mapcar (lambda (listener) (window-frame-list (listener-window listener)))
+                        (reverse *listeners*)))
+          (remember-canvas-window)
+          (save-preferences))
+      (error (condition) (note "remember-windows: ~a" condition)))))
+
+(defparameter *reopened-window-limit* 8
+  "No more windows than this are reopened, whatever the file says.")
+
+(defun restore-windows (listener)
+  "Put LISTENER's window where the first window was when the application was
+last quit, and open the others it had, where they were.  Thread 1; MAIN only."
+  (when *reopen-windows*
+    (let ((frames (remove-if-not #'sound-frame-p (remembered :windows))))
+      (when frames
+        (set-window-frame (listener-window listener) (first frames))
+        (loop for frame in (rest frames)
+              repeat (1- *reopened-window-limit*)
+              do (set-window-frame (listener-window (new-listener)) frame))
+        ;; The first one in front again, as it is on a fresh start.
+        (when (rest frames)
+          (show-listener-window listener))
+        (length frames)))))
 
 (defun make-listener-window (listener &key (title "Lisp Listener")
                                            (frame +default-frame+))
@@ -291,18 +368,24 @@ and a menu item whose action no longer resolves is one nothing else notices."
 (defun install-menu (controller)
   (let ((main (objc:invoke (objc:invoke "NSMenu" "alloc") "initWithTitle:" "Main"))
         (application (objc.runloop:shared-application)))
-    (add-submenu main "Lisp Listener"
-                 '(("About Lisp Listener" "orderFrontStandardAboutPanel:")
-                   :separator
-                   ("Hide Lisp Listener" "hide:" "h")
-                   ("Hide Others" "hideOtherApplications:" "H")
-                   :separator
-                   ("Quit Lisp Listener" "terminate:" "q")))
+    (let ((menu (add-submenu main "Lisp Listener"
+                             '(("About Lisp Listener" "orderFrontStandardAboutPanel:")
+                               :separator
+                               ("Settings…" "listenerPreferences:" ",")
+                               :separator
+                               ("Hide Lisp Listener" "hide:" "h")
+                               ("Hide Others" "hideOtherApplications:" "H")
+                               :separator
+                               ("Quit Lisp Listener" "terminate:" "q")))))
+      ;; The one item here that is ours; the rest are the responder chain's.
+      (objc:invoke (objc:invoke menu "itemWithTitle:" "Settings…") "setTarget:" controller))
     ;; Ours too, so the controller: Open... loads into the front listener, and
     ;; Save Transcript... writes the front listener's transcript.
     (add-submenu main "File"
                  '(("Open…" "listenerOpen:" "o")
-                   ("Save Transcript…" "listenerSaveTranscript:" "S"))
+                   ("Save Transcript…" "listenerSaveTranscript:" "S")
+                   :separator
+                   ("Save Canvas…" "listenerSaveCanvas:"))
                  controller)
     (add-submenu main "Edit"
                  '(("Cut" "cut:" "x")
@@ -310,6 +393,11 @@ and a menu item whose action no longer resolves is one nothing else notices."
                    ("Paste" "paste:" "v")
                    :separator
                    ("Select All" "selectAll:" "a")))
+    ;; The size of the type, which the Settings window also has.
+    (add-submenu main "View"
+                 '(("Bigger" "listenerBigger:" "+")
+                   ("Smaller" "listenerSmaller:" "-"))
+                 controller)
     ;; These three are the listener's own, so they name the controller rather
     ;; than trusting the responder chain to find something that answers.  The
     ;; controller is the application's, not any window's: a menu item's target

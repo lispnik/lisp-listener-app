@@ -18,8 +18,10 @@ target the listener thread hops to, and only then the thread."
   (setf *log* *standard-output*)
   (objc:ensure-objc-initialized)
   (reset-transcript-attributes)
-  ;; The canvas's names, in CL-USER before the init file, which may draw.
+  ;; The canvas's names, in CL-USER before the init file, which may draw; and
+  ;; the preferences before it, so that it has the last word.
   (install-user-vocabulary)
+  (load-preferences)
   (load-init-file)
   (let ((listener (make-listener))
         (restarts (make-instance 'restarts-controller))
@@ -39,7 +41,11 @@ target the listener thread hops to, and only then the thread."
       (let ((safe (objc:invoke root "safeAreaLayoutGuide")))
         (uikit:pin pointer "topAnchor" safe "topAnchor")
         (uikit:pin pointer "leadingAnchor" safe "leadingAnchor" 4)
-        (uikit:pin pointer "trailingAnchor" safe "trailingAnchor" -4))
+        ;; Kept, not just pinned: a docked canvas takes the right of the window
+        ;; and this is the constraint it switches off to do it.
+        (setf *transcript-trailing*
+              (objc:retain (constraint pointer "trailingAnchor" safe "trailingAnchor" -4)))
+        (objc:invoke *transcript-trailing* "setActive:" t))
       ;; Above the keyboard, not under it, and following it as it comes and
       ;; goes -- the key bar included.
       (uikit:pin pointer "bottomAnchor"
@@ -123,6 +129,80 @@ is first: a file not loaded is worse than one loaded untidily)."
              (objc:invoke timer "invalidate")
              (load-files-into-listener listener paths)))))))
 
+;;; Open..., from inside ----------------------------------------------------------
+;;;
+;;; The same thing in the other direction: the Open key, or ⌘O, puts up the
+;;; system's document picker, and what is chosen there is loaded.
+
+(objc:define-objc-class open-picker-delegate ()
+  ()
+  (:objc-class-name "LispListenerOpenPickerDelegate"))
+
+(defvar *open-picker-delegate* nil
+  "The picker's delegate, kept: a picker holds its delegate weakly.")
+
+(defun open-picked-urls (urls listener)
+  "Load the Lisp files among URLS, an NSArray of NSURL.  Thread 1.
+
+Chosen in place, not as copies, so one of the app's own files is loaded where
+it is; one from elsewhere is security scoped, and is copied in while access to
+it is held -- the load itself comes later, on another thread."
+  (let ((paths '()))
+    (loop for i from 0 below (objc:invoke urls "count")
+          for url = (objc:invoke urls "objectAtIndex:" i)
+          for path = (objc:ns-string-to-string (objc:invoke url "path"))
+          do (if (loadable-file-p path)
+                 (let ((scoped (objc:invoke-bool url "startAccessingSecurityScopedResource")))
+                   (unwind-protect
+                        (push (import-opened-file path (history-directory)) paths)
+                     (when scoped
+                       (objc:invoke url "stopAccessingSecurityScopedResource"))))
+                 (note "open: ~a is not a Lisp file" path)))
+    (when (and listener paths)
+      (load-when-prompted listener (nreverse paths)))
+    (length paths)))
+
+(objc:define-objc-method ("documentPicker:didPickDocumentsAtURLs:" :void)
+    ((self open-picker-delegate)
+     (picker objc:objc-object-pointer)
+     (urls objc:objc-object-pointer))
+  (declare (ignorable picker))
+  (handler-case (open-picked-urls urls (current-listener))
+    (error (condition) (note "documentPicker:didPickDocumentsAtURLs: ~a" condition))))
+
+(defun lisp-content-types ()
+  "The UTTypes of the files LOAD takes, as an NSArray.  By extension: the type
+this app declares for .lisp is whatever the system says it is."
+  (let ((types (objc:invoke "NSMutableArray" "array")))
+    (dolist (extension *loadable-file-types* types)
+      (let ((type (objc:invoke "UTType" "typeWithFilenameExtension:" extension)))
+        (when (live-pointer-p type)
+          (objc:invoke types "addObject:" type))))))
+
+(defun show-open-picker (&optional (listener (current-listener)))
+  "Put up the document picker, to choose Lisp files to load.  Thread 1."
+  (when listener
+    (unless *open-picker-delegate*
+      (setf *open-picker-delegate* (uikit:keep (make-instance 'open-picker-delegate))))
+    (let ((picker (objc:invoke (objc:invoke "UIDocumentPickerViewController" "alloc")
+                               "initForOpeningContentTypes:asCopy:"
+                               (lisp-content-types) nil)))
+      (objc:invoke picker "setAllowsMultipleSelection:" t)
+      (objc:invoke picker "setDelegate:"
+                   (objc:objc-object-pointer *open-picker-delegate*))
+      (objc:invoke (presenting-controller listener)
+                   "presentViewController:animated:completion:" picker t nil)
+      ;; The presenter holds it now; the +1 from -alloc is ours to drop.
+      (objc:release picker)
+      t)))
+
+(defun open-picker-up-p (listener)
+  "Whether the document picker is what is presented.  For the self-test."
+  (let ((top (presenting-controller listener)))
+    (and (live-pointer-p top)
+         (objc:invoke-bool top "isKindOfClass:"
+                           (objc:coerce-to-objc-class "UIDocumentPickerViewController")))))
+
 (defun install-open-url-hook ()
   "Tell asdf-ios-app's runtime where URLs go.  By name, at run time: the
 package is the app's, and is not there when this file is compiled off a Mac."
@@ -181,6 +261,43 @@ delegate at all, so it walked straight past the hook this is here to test."
         (pointer (listener-view listener)))
     (replace-pending-input view pointer text)
     (submit-input view pointer)))
+
+(defun heart-points (&optional (count 70))
+  "A heart, as canvas points, for the self-test's finger to draw."
+  (loop for i from 0 to count
+        for a = (* 2 pi (/ i count))
+        collect (cons (* 4.6 16 (expt (sin a) 3))
+                      (+ 8 (* 4.6 (- (* 13 (cos a)) (* 5 (cos (* 2 a)))
+                                     (* 2 (cos (* 3 a))) (cos (* 4 a))))))))
+
+(defvar *finger-lifted* t
+  "False while DRAW-WITH-A-FINGER's finger is still on the canvas.")
+
+(defun draw-with-a-finger (points)
+  "Run a finger along POINTS, canvas (x . y)s, a point every thirtieth of a
+second: down at the first, moving through the rest, up after the last.  Through
+CANVAS-POINTER-EVENT, which is what the canvas's recognizer calls."
+  (let ((remaining points)
+        (first t))
+    (setf *finger-lifted* nil)
+    (uikit:after-every
+     (/ 1d0 30)
+     (lambda (timer)
+       (let* ((view (canvas-view-pointer))
+              (bounds (objc:invoke view "bounds"))
+              (width (aref bounds 2)) (height (aref bounds 3))
+              (scale (/ (min width height) 200d0)))
+         (flet ((event (phase point)
+                  (canvas-pointer-event phase
+                                        (+ (/ width 2) (* scale (car point)))
+                                        (- (/ height 2) (* scale (cdr point)))
+                                        width height)))
+           (cond ((null remaining)
+                  (objc:invoke timer "invalidate")
+                  (event :up (first (last points)))
+                  (setf *finger-lifted* t))
+                 (t (event (if first :down :move) (pop remaining))
+                    (setf first nil)))))))))
 
 (defun build-self-test-steps (listener)
   "Each step: a label, a predicate that says it may run, and what it does.
@@ -414,6 +531,104 @@ A step whose predicate has not held within its time fails."
            (unless (press-canvas-key :left) (error "there is no left arrow"))
            (let ((key (canvas:key)))
              (unless (eq key :left) (error "(key) answered ~s" key)))))
+   (list "it is where the room allows: docked if wide, a sheet if not"
+         (constantly t)
+         (lambda ()
+           (let ((docks (canvas-docks-p)))
+             (note "selftest: the canvas is ~:[a sheet~;docked~]" docks)
+             (unless (if docks (canvas-docked-p) (canvas-sheet-up-p))
+               (error "docks-p ~a, docked ~a, sheet ~a"
+                      docks (canvas-docked-p) (canvas-sheet-up-p)))
+             (when docks
+               ;; The transcript really did give up the room.
+               (let ((text (aref (objc:invoke (listener-view listener) "frame") 2))
+                     (root (aref (objc:invoke (uikit:root-view) "bounds") 2)))
+                 (unless (< text (* 0.7 root))
+                   (error "the transcript is ~,0f of ~,0f points wide" text root)))))))
+   ;; The window's width changing under a canvas that is up, as a rotation
+   ;; would change it: pretended, by moving the line between room and none.
+   ;; Two steps, a tick apart, as two rotations would be: a sheet dismissed is
+   ;; not gone until the run loop has turned.
+   (list "and it moves when the room changes" (constantly t)
+         (lambda ()
+           (let ((docked (canvas-docked-p)))
+             (let ((*canvas-dock-width* (if docked 1d9 0d0)))
+               (unless (replace-canvas)
+                 (error "it did not move"))
+               (when (eq docked (canvas-docked-p))
+                 (error "it is still ~:[a sheet~;docked~]" docked))))))
+   (list "and back when it changes back"
+         ;; Once a sheet that was dismissed has gone.
+         (lambda () (not (and (canvas-docked-p) (canvas-sheet-up-p))))
+         (lambda ()
+           (unless (and (replace-canvas)
+                        (eq (canvas-docks-p) (canvas-docked-p)))
+             (error "it did not move back: docks ~a, docked ~a"
+                    (canvas-docks-p) (canvas-docked-p)))))
+   ;; A finger on the canvas, as its recognizer reports one.
+   (list "a touch is the pointer, and a tap is a key" (constantly t)
+         (lambda ()
+           (loop while (canvas:key))
+           (let* ((view (canvas-view-pointer))
+                  (bounds (objc:invoke view "bounds"))
+                  (recognizers (objc:invoke (objc:invoke view "gestureRecognizers") "count")))
+             (unless (= 1 recognizers)
+               (error "~d recognizers on the canvas, wanted 1" recognizers))
+             (canvas-pointer-event :down (/ (aref bounds 2) 2) (/ (aref bounds 3) 2)
+                                   (aref bounds 2) (aref bounds 3))
+             (multiple-value-bind (x y down) (canvas:pointer)
+               (unless (and down (< (abs x) 0.01) (< (abs y) 0.01))
+                 (error "(pointer) answered ~a ~a ~a" x y down)))
+             (unless (eq (canvas:key) :click)
+               (error "a tap was not the key :click"))
+             (canvas-pointer-event :up 0 0 (aref bounds 2) (aref bounds 3)))))
+   ;; The canvas as a picture, both ways, into the app's own folder.
+   (list "the canvas is saved as a PNG and as SVG" (constantly t)
+         (lambda ()
+           (type-line listener "(list (save \"selftest\") (save \"selftest.svg\"))")))
+   (list "and both are there"
+         (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (flet ((size (name)
+                    (with-open-file (in (merge-pathnames name (history-directory))
+                                        :element-type '(unsigned-byte 8)
+                                        :if-does-not-exist nil)
+                      (if in (file-length in) 0))))
+             (unless (and (> (size "selftest.png") 2000) (> (size "selftest.svg") 2000))
+               (error "selftest.png is ~d bytes and selftest.svg ~d"
+                      (size "selftest.png") (size "selftest.svg"))))))
+   ;; More of the examples, each held for a look.
+   (list "a tree, every branch a smaller tree" (lambda () (at-top-level-prompt-p listener))
+         (lambda () (type-line listener "(example \"tree\")")))
+   (list "is drawn by a function that calls itself"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (= 511 (length (canvas-contents)))))
+         nil)
+   (list :hold nil nil)
+   (list "the Mandelbrot set" (constantly t)
+         (lambda () (type-line listener "(example \"mandelbrot\")")))
+   (list "is twenty lines, with Lisp's complex numbers"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (> (length (canvas-contents)) 600)))
+         nil)
+   (list :hold nil nil)
+   ;; Doodle, with a finger the self-test supplies.
+   (list "the canvas takes a finger" (constantly t)
+         (lambda () (type-line listener "(example \"doodle\")")))
+   (list "(pointer) says where it is, and a line follows it"
+         (lambda () (and (not (at-top-level-prompt-p listener))
+                         (= 1 (length (canvas-contents)))
+                         (find :text (canvas-contents) :key #'first)))
+         (lambda () (draw-with-a-finger (heart-points))))
+   (list "until the finger lifts"
+         ;; Some lines, not all seventy: the doodle looks fifty times a
+         ;; second when it can, and on a busy simulator it cannot.
+         (lambda () (and *finger-lifted*
+                         (> (count :line (canvas-contents) :key #'first) 10)))
+         ;; Escape, which is how a doodle is given up early.
+         (lambda () (canvas-push-key :escape)))
+   (list "and what was drawn stays" (lambda () (at-top-level-prompt-p listener)) nil)
+   (list :hold nil nil)
    ;; An error while the canvas is up: the restarts go over it, not nowhere.
    (list "an error with the canvas up" (constantly t)
          (lambda () (type-line listener "(circle 0 0 :big)")))
@@ -441,6 +656,69 @@ A step whose predicate has not held within its time fails."
              (unless (live-pointer-p done) (error "there is no Done button"))
              (objc:invoke done "sendActionsForControlEvents:" 64))))
    (list "and it is gone" (lambda () (not (canvas-visible-p))) nil)
+   ;; Settings, from its key: a switch and the size of the type, each in
+   ;; force and written down the moment it is touched.
+   (list "⚙ opens Settings" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (unless (show-settings-sheet listener) (error "there was nothing to show"))))
+   (list "a switch turns paredit off, and the stepper makes the type bigger"
+         (lambda () (settings-sheet-up-p))
+         (lambda ()
+           (let ((switch (settings-control :paredit))
+                 (stepper (settings-control :font-size))
+                 (before *font-size*))
+             (unless (objc:invoke-bool switch "isOn") (error "the switch shows paredit off"))
+             (objc:invoke switch "setOn:animated:" nil t)
+             (objc:invoke switch "sendActionsForControlEvents:" +ui-control-event-value-changed+)
+             (when (or *paredit-enabled* (getf (read-preferences) :paredit t))
+               (error "paredit is ~a and the file says ~a"
+                      *paredit-enabled* (getf (read-preferences) :paredit t)))
+             (objc:invoke stepper "setValue:" (+ before 4))
+             (objc:invoke stepper "sendActionsForControlEvents:" +ui-control-event-value-changed+)
+             (unless (= *font-size* (+ before 4))
+               (error "the size is ~a, was ~a" *font-size* before)))))
+   (list :hold nil nil)
+   (list "and both are put back" (constantly t)
+         (lambda ()
+           (let ((switch (settings-control :paredit))
+                 (stepper (settings-control :font-size)))
+             (objc:invoke switch "setOn:animated:" t t)
+             (objc:invoke switch "sendActionsForControlEvents:" +ui-control-event-value-changed+)
+             (objc:invoke stepper "setValue:" (- *font-size* 4))
+             (objc:invoke stepper "sendActionsForControlEvents:" +ui-control-event-value-changed+)
+             (unless *paredit-enabled* (error "paredit is still off"))
+             (hide-settings-sheet))))
+   (list "Settings is put away" (lambda () (not (settings-sheet-up-p))) nil)
+   ;; An example put at the prompt to change, rather than run.
+   (list "an example is asked for, to edit" (lambda () (at-top-level-prompt-p listener))
+         (lambda () (type-line listener "(example-edit \"hello\")")))
+   (list "and its source is at the prompt, unsubmitted"
+         (lambda ()
+           (search "(circle 0 0 60)"
+                   (pending-input (listener-view-object listener) (listener-view listener))))
+         (lambda ()
+           (replace-pending-input (listener-view-object listener) (listener-view listener) "")))
+   ;; The size of the type: changed, in force, and written down.
+   (list "the type is made bigger" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (let ((before *font-size*))
+             (change-font-size 3)
+             (unless (and (= *font-size* (+ before 3))
+                          (eql *font-size* (getf (read-preferences) :font-size)))
+               (error "the size is ~a, was ~a, and the file says ~a"
+                      *font-size* before (getf (read-preferences) :font-size))))))
+   (list :hold nil nil)
+   (list "and put back" (constantly t) (lambda () (change-font-size -3)))
+   ;; Open..., as the key does it: the system's picker comes up.
+   (list "Open puts up the document picker" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (unless (show-open-picker listener)
+             (error "there was nothing to show"))))
+   (list "and it is the picker that is up" (lambda () (open-picker-up-p listener))
+         (lambda ()
+           (objc:invoke (presenting-controller listener)
+                        "dismissViewControllerAnimated:completion:" nil nil)))
+   (list "until it is put away" (lambda () (not (open-picker-up-p listener))) nil)
    ;; A file from Files, as the scene delegate delivers one: a URL, to the
    ;; runtime's hook.  A space in the name, which the URL has to carry encoded.
    (list "a Lisp file is handed over by the system"

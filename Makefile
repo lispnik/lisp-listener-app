@@ -10,7 +10,7 @@ SBCL ?= sbcl
 
 .PHONY: deps check syntax-check compile-check test test-ecl run app demo ios-demo \
         ios-device ipa testflight \
-        ios-toolchain ios run-ios clean
+        ios-toolchain ios run-ios test-ios clean
 
 ECL ?= ecl
 
@@ -107,6 +107,12 @@ run-ios: src/examples.lisp
 	    --eval '(princ (asdf-ios-app:run-in-simulator "lisp-listener-ios"))' \
 	    --eval '(ext:quit 0)'
 
+## The app's self-test, in an iPhone simulator AND an iPad one: the iPad is not
+## a big phone, and has shown a crash the iPhone never did.  DEVICES names
+## others.  tools/ios-selftest.sh has the rest.
+test-ios: ios
+	tools/ios-selftest.sh $(DEVICES)
+
 ## iOS on a phone.  `ios-device' builds a development app for a connected
 ## device (IOS_SIGNING_IDENTITY and IOS_PROVISIONING_PROFILE in local.mk);
 ## `ipa' an App Store build, packaged; `testflight' checks, validates and
@@ -138,11 +144,12 @@ ipa: src/examples.lisp
 testflight: ipa
 	ASC_KEY_ID="$(ASC_KEY_ID)" ASC_ISSUER_ID="$(ASC_ISSUER_ID)" tools/testflight.sh "$(IPA)"
 
-## The iOS app's self-test, recorded from the booted simulator and captioned
-## step by step: build/ios-demo/lisp-listener-ios-demo.mp4.  Run `make run-ios'
-## first, so the simulator has the current app.
-ios-demo:
-	tools/ios-demo.sh build/ios-demo
+## The iOS app's self-test, recorded and captioned step by step, in an iPhone
+## simulator and an iPad one -- where the canvas docks beside the transcript:
+## build/ios-demo/{iphone,ipad}/lisp-listener-ios-demo.mp4.
+ios-demo: ios
+	DEVICE=iPhone tools/ios-demo.sh build/ios-demo/iphone
+	DEVICE=iPad tools/ios-demo.sh build/ios-demo/ipad
 
 clean:
 	rm -rf build

@@ -49,7 +49,10 @@
    ;; The examples that ship in the image.
    #:examples
    #:example
-   #:example-source))
+   #:example-source
+   #:example-edit
+   ;; Settings, kept between launches.
+   #:preference))
 
 ;;; CANVAS is the other package, and it holds nothing but names: the drawing
 ;;; vocabulary a person types at the prompt.  It uses nothing, so that LINE and
@@ -60,7 +63,7 @@
   (:use)
   (:export
    ;; The canvas itself.
-   #:show #:hide #:clear #:background
+   #:show #:hide #:clear #:background #:save
    ;; The pen.
    #:color #:hue #:pen
    ;; Shapes.  The canvas runs from -100 to 100 each way, y upwards.
@@ -68,4 +71,4 @@
    ;; A turtle.
    #:forward #:back #:left #:right #:pen-up #:pen-down #:home #:move-to
    ;; Animation and games.
-   #:frame #:wait #:key))
+   #:frame #:wait #:key #:pointer))

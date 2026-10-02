@@ -5,8 +5,13 @@
 # needed), while the app's self-test drives a session: typing, paredit,
 # completion, the history, an error and its sheet, a value, a form stopped.
 # Each step the self-test logs becomes a caption, timed from the start of the
-# recording.  Needs a booted simulator with the app installed (`make ios' and
-# `make run-ios' put it there), ffmpeg built with libass, and python3.
+# recording.  Needs the app built (`make ios'), ffmpeg built with libass, and
+# python3.
+#
+# DEVICE names the simulator, by the start of its name or by UDID (see
+# tools/ios-device.sh): DEVICE=iPad is where the canvas docks beside the
+# transcript.  Without it, whichever simulator is booted.  A simulator this
+# boots, it shuts down again; the app is installed afresh either way.
 #
 # Writes DIR/lisp-listener-ios-demo.mp4 (default build/ios-demo).
 set -eu
@@ -16,9 +21,25 @@ app=org.lispnik.lisp-listener
 mkdir -p "$dir"
 dir=$(cd "$dir" && pwd)
 
-device=$(xcrun simctl list devices booted | sed -n 's/.*(\([0-9A-F-]\{36\}\)) (Booted).*/\1/p' | head -1)
-[ -n "$device" ] || { echo "ios-demo: no booted simulator" >&2; exit 1; }
+booted_here=0
+if [ -n "${DEVICE:-}" ]; then
+  device=$("$(dirname "$0")/ios-device.sh" "$DEVICE") \
+    || { echo "ios-demo: no simulator called $DEVICE" >&2; exit 1; }
+  if ! xcrun simctl list devices booted | grep -q "$device"; then
+    xcrun simctl boot "$device"
+    booted_here=1
+  fi
+  xcrun simctl bootstatus "$device" -b > /dev/null
+else
+  device=$(xcrun simctl list devices booted | sed -n 's/.*(\([0-9A-F-]\{36\}\)) (Booted).*/\1/p' | head -1)
+  [ -n "$device" ] || { echo "ios-demo: no booted simulator, and no DEVICE" >&2; exit 1; }
+fi
+bundle="${APP:-build/iphonesimulator/Lisp Listener.app}"
+[ -d "$bundle" ] || { echo "ios-demo: no $bundle -- run: make ios" >&2; exit 2; }
+xcrun simctl terminate "$device" "$app" 2>/dev/null || true
+xcrun simctl install "$device" "$bundle"
 container=$(xcrun simctl get_app_container "$device" "$app" data)
+mkdir -p "$container/Documents"
 log="$container/Documents/console.log"
 
 xcrun simctl terminate "$device" "$app" 2>/dev/null || true
@@ -32,11 +53,13 @@ start=$(python3 -c 'import time; print(time.time())')
 SIMCTL_CHILD_LISP_LISTENER_SELF_TEST=$hold \
   xcrun simctl launch "$device" "$app" >/dev/null
 
-# Each new `selftest: ok    <step>' line, with when it appeared.
+# Each new `selftest: ok    <step>' line, with when it appeared.  Not under -e:
+# a self-test that fails still has a video worth making, and says so at the end.
+set +e
 python3 - "$log" "$start" "$dir/steps.tsv" <<'EOF'
 import sys, time, re
 log, start, out = sys.argv[1], float(sys.argv[2]), sys.argv[3]
-seen, deadline = 0, time.time() + 240
+seen, deadline = 0, time.time() + 420
 with open(out, 'w') as steps:
     while time.time() < deadline:
         try:
@@ -57,8 +80,10 @@ with open(out, 'w') as steps:
 sys.exit(2)
 EOF
 verdict=$?
+set -e
 sleep 2
 kill -INT "$recorder"; wait "$recorder" 2>/dev/null || true
+[ "$booted_here" -eq 1 ] && xcrun simctl shutdown "$device"
 
 # Captions: each step from when it was logged until the next one.
 size=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "$dir/raw.mp4")

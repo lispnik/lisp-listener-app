@@ -354,9 +354,8 @@ history are its own, and closing it leaves the first as it was."
     ((self test-drag))
   (test-drag-pasteboard self))
 
-(defun drop-files (listener paths)
-  "Drop PATHS on LISTENER's view, as the Finder would.  Answers what the view's
--performDragOperation: answered."
+(defun call-with-test-drag (paths function)
+  "Call FUNCTION with a stand-in drag carrying PATHS, as the Finder's would."
   (let ((pasteboard (objc:invoke "NSPasteboard" "pasteboardWithUniqueName"))
         (urls (objc:invoke "NSMutableArray" "array"))
         (drag (make-instance 'test-drag)))
@@ -365,9 +364,29 @@ history are its own, and closing it leaves the first as it was."
       (objc:invoke urls "addObject:" (objc:invoke "NSURL" "fileURLWithPath:" path)))
     (objc:invoke pasteboard "writeObjects:" urls)
     (setf (test-drag-pasteboard drag) pasteboard)
-    (prog1 (objc:invoke-bool (listener-view listener) "performDragOperation:"
-                             (objc:objc-object-pointer drag))
+    (unwind-protect (funcall function (objc:objc-object-pointer drag))
       (objc:invoke pasteboard "releaseGlobally"))))
+
+(defun drop-files (listener paths)
+  "Drop PATHS on LISTENER's view, as the Finder would.  Answers what the view's
+-performDragOperation: answered.
+
+For files the view takes itself.  One it leaves to NSTextView must not come
+this way: super asks a real drag for a dozen things this stand-in does not
+have, and every run logged the exception the first of them raised."
+  (call-with-test-drag
+   paths
+   (lambda (drag)
+     (objc:invoke-bool (listener-view listener) "performDragOperation:" drag))))
+
+(defun dropped-paths (paths)
+  "What the view reads off a drag of PATHS, and which of those it would load:
+the decision -performDragOperation: makes, without making the drop."
+  (call-with-test-drag
+   paths
+   (lambda (drag)
+     (let ((read (dragged-file-paths drag)))
+       (values read (remove-if-not #'loadable-file-p read))))))
 
 (defun debugger-test-files (listener directory)
   "File > Open..., a drop, and Save Transcript...: the panels are AppKit's, so
@@ -391,16 +410,23 @@ what is checked is everything either side of them."
     (back-at-top-p listener)
     (check-step (submit-and-wait listener "(cl-user::dropped-in)" ":DROPPED")
                 "what it defined is there to call")
-    (let ((before (length (transcript-text listener))))
-      (drop-files listener (list text))
-      (pump-for 0.3d0)
-      (check-step (not (search "(load" (transcript-text listener) :start2 before))
-                  "a text file dropped is not loaded")
-      (replace-pending-input (listener-view-object listener) (listener-view listener) ""))
+    (multiple-value-bind (read loadable) (dropped-paths (list text))
+      (check-step (and (= 1 (length read)) (search "dropped.txt" (first read))
+                       (null loadable))
+                  "a text file dropped is read off the drag and left to the text view"))
     (save-transcript listener saved)
     (let ((written (uiop:read-file-string saved :external-format :utf-8)))
       (check-step (and (search "CL-USER>" written) (search (load-form lisp) written))
                   "Save Transcript… writes the transcript, the load included"))))
+
+(defun canvas-mouse-test-event (type x y)
+  "A mouse event at (X, Y) in the canvas window's coordinates, as AppKit would
+deliver one.  TYPE is an NSEventType: 1 down, 2 up, 5 moved, 6 dragged."
+  (objc:invoke "NSEvent"
+               "mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:"
+               type (vector x y) 0 0d0
+               (objc:invoke *canvas-window* "windowNumber")
+               (cffi:null-pointer) 0 1 1.0))
 
 (defun press-menu-item (menu-title item-title)
   "Choose ITEM-TITLE from MENU-TITLE: its action is sent to its target, with
@@ -425,7 +451,8 @@ condition and not the application's."
 (defun debugger-test-canvas (listener directory)
   "The canvas and the examples: the menu, the window, a picture, the keys."
   (check-step (and (menu-item-present-p "Examples" "Spiral")
-                   (menu-item-present-p "Examples" "Snake"))
+                   (menu-item-present-p "Examples" "Snake")
+                   (menu-item-present-p "Examples" "Pong"))
               "the Examples menu lists them, wired to the controller")
   (check-step (not (canvas-visible-p)) "there is no canvas until something is drawn")
   (let ((paints *canvas-paints*))
@@ -465,6 +492,51 @@ condition and not the application's."
                (key-equivalent-event *canvas-window* "q" 0))
   (check-step (and (eq (canvas:key) :left) (eql (canvas:key) #\q) (null (canvas:key)))
               "a left arrow and a q pressed in it are what (key) answers")
+  ;; The mouse, as AppKit delivers it: an event to the view, in the window's
+  ;; coordinates.  The middle of a 480-point canvas is the canvas's (0, 0).
+  (flet ((mouse (type x y) (canvas-mouse-test-event type x y)))
+    (let* ((bounds (objc:invoke (canvas-view-pointer) "bounds"))
+           (cx (/ (aref bounds 2) 2)) (cy (/ (aref bounds 3) 2))
+           (unit (/ (min (aref bounds 2) (aref bounds 3)) 200)))
+      (objc:invoke (canvas-view-pointer) "mouseDown:" (mouse 1 cx cy))
+      (multiple-value-bind (x y down) (canvas:pointer)
+        (check-step (and down (< (abs x) 0.01) (< (abs y) 0.01))
+                    "a press in the middle of the canvas is (pointer) at (0, 0), down"))
+      (check-step (eq (canvas:key) :click) "and the key :click")
+      (objc:invoke (canvas-view-pointer) "mouseDragged:"
+                   (mouse 6 (+ cx (* 50 unit)) (+ cy (* 25 unit))))
+      (multiple-value-bind (x y down) (canvas:pointer)
+        (check-step (and down (< (abs (- x 50)) 0.01) (< (abs (- y 25)) 0.01))
+                    "dragged right and up it is (50, 25): y goes up, as on the canvas"))
+      (objc:invoke (canvas-view-pointer) "mouseUp:" (mouse 2 cx cy))
+      (check-step (not (nth-value 2 (canvas:pointer))) "and released it is up")
+      ;; Hover: no button, and (pointer) still follows.
+      (check-step (= 1 (objc:invoke (objc:invoke (canvas-view-pointer) "trackingAreas") "count"))
+                  "the canvas has a tracking area, which is what gets it -mouseMoved:")
+      (objc:invoke (canvas-view-pointer) "mouseMoved:"
+                   (mouse 5 (- cx (* 40 unit)) (- cy (* 10 unit))))
+      (multiple-value-bind (x y down) (canvas:pointer)
+        (check-step (and (not down) (< (abs (+ x 40)) 0.01) (< (abs (+ y 10)) 0.01))
+                    "moved with no button down, (pointer) follows to (-40, -10), up"))))
+  ;; Saved, from the prompt: the PNG is the view's doing, on thread 1, waited for.
+  (let ((png (namestring (merge-pathnames "saved.png" (uiop:ensure-directory-pathname directory))))
+        (svg (namestring (merge-pathnames "saved.svg" (uiop:ensure-directory-pathname directory)))))
+    (submit-and-wait listener (format nil "(progn (save ~s) (save ~s) :saved)" png svg) ":SAVED")
+    (check-step (and (file-not-empty-p png) (file-not-empty-p svg))
+                "(save) writes the canvas as a PNG and as SVG"))
+  (check-step (menu-item-present-p "File" "Save Canvas…")
+              "the File menu has Save Canvas…")
+  ;; An example at the prompt to change, rather than run.
+  (type-and-submit listener "(example-edit \"hello\")")
+  (check-step (wait-for (lambda ()
+                          (search "(circle 0 0 60)"
+                                  (pending-input (listener-view-object listener)
+                                                 (listener-view listener))))
+                        :timeout 10)
+              "(example-edit) puts an example's source at the prompt, unsubmitted")
+  ;; Emptied first: "at the top level" means a prompt with nothing after it.
+  (replace-pending-input (listener-view-object listener) (listener-view listener) "")
+  (back-at-top-p listener)
   (submit-and-wait listener "(progn (dotimes (i 5) (frame (dot i 0) (dot 0 i)) (wait 0.02)) :framed)"
                    ":FRAMED")
   (check-step (= 2 (length (canvas-contents))) "each frame replaces the last")
@@ -495,6 +567,97 @@ condition and not the application's."
   (objc:invoke (listener-window listener) "makeFirstResponder:" (listener-view listener))
   (pump-for 0.2d0))
 
+(defun transcript-point-size (listener)
+  "The size of the type the transcript's first character is set in."
+  (objc:invoke (objc:invoke (transcript-storage (listener-view listener))
+                            "attribute:atIndex:effectiveRange:"
+                            (%ns-string-constant "NSFontAttributeName") 0
+                            (cffi:null-pointer))
+               "pointSize"))
+
+(defun debugger-test-settings (listener directory)
+  "The Settings window and the View menu: a switch, the size of the type, and
+the file they are written to."
+  (check-step (and (menu-item-present-p "Lisp Listener" "Settings…")
+                   (menu-item-present-p "View" "Bigger")
+                   (menu-item-present-p "View" "Smaller"))
+              "Settings… and the View menu's Bigger and Smaller are wired to the controller")
+  (check-step (press-menu-item "Lisp Listener" "Settings…") "Settings… is chosen")
+  (check-step (and (live-pointer-p *preferences-window*)
+                   (objc:invoke-bool *preferences-window* "isVisible"))
+              "and its window opens")
+  (write-window-png *preferences-window*
+                    (namestring (merge-pathnames "settings.png"
+                                                 (uiop:ensure-directory-pathname directory))))
+  (let ((box (preference-control :paredit)))
+    (check-step (= 1 (objc:invoke box "state")) "the paredit switch shows it on")
+    (objc:invoke box "performClick:" nil)
+    (pump 0.1d0)
+    (check-step (and (null *paredit-enabled*)
+                     (null (getf (read-preferences) :paredit t)))
+                "clicking it switches paredit off, and the file says so")
+    (let ((view (listener-view-object listener)) (pointer (listener-view listener)))
+      (replace-pending-input view pointer "")
+      (objc:invoke pointer "insertText:replacementRange:" "(" (cons #x7FFFFFFFFFFFFFFF 0))
+      (check-step (string= "(" (pending-input view pointer))
+                  "so a paren typed now is one paren")
+      (replace-pending-input view pointer ""))
+    (objc:invoke box "performClick:" nil)
+    (pump 0.1d0)
+    (check-step *paredit-enabled* "and clicking again switches it back on"))
+  (let ((before (transcript-point-size listener)))
+    (check-step (press-menu-item "View" "Bigger") "View > Bigger is chosen")
+    (pump 0.1d0)
+    (check-step (= (transcript-point-size listener) (1+ before))
+                "the transcript already there is set a point bigger (~a -> ~a)"
+                before (transcript-point-size listener))
+    (check-step (= (1+ before) (getf (read-preferences) :font-size 0))
+                "the file has the new size")
+    (let ((popup (preference-control :font-size)))
+      (check-step (string= (font-size-title (1+ before))
+                           (objc:ns-string-to-string (objc:invoke popup "titleOfSelectedItem")))
+                  "and so does the Settings window's pop-up")
+      ;; Back, through the pop-up, as a choice from it arrives.
+      (objc:invoke popup "selectItemWithTitle:" (font-size-title before))
+      (objc:invoke (objc:objc-object-pointer *preferences-controller*)
+                   "preferenceFontSize:" popup)
+      (pump 0.1d0)
+      (check-step (= (transcript-point-size listener) before)
+                  "choosing a size in the pop-up sets the type in it")))
+  (hide-preferences-window)
+  (check-step (not (objc:invoke-bool *preferences-window* "isVisible")) "Settings closes"))
+
+(defun debugger-test-windows (listener)
+  "Where the windows were: recorded, refused when out of reach, and put back."
+  (let* ((window (listener-window listener))
+         (frame (window-frame-list window)))
+    (remember-windows)
+    (check-step (equal (first (getf (read-preferences) :windows)) frame)
+                "the listener's frame is written to the preferences file")
+    (check-step (and (not (set-window-frame window '(-50000 -50000 760 520)))
+                     (equal (window-frame-list window) frame))
+                "a frame on no screen is refused, and the window stays where it is")
+    (check-step (not (set-window-frame window '(10 10 5 5)))
+                "and so is one too small to be a window")
+    ;; Two windows remembered: the first is moved, the second opened.
+    (let ((first-frame (list (+ (first frame) 30) (- (second frame) 30) 700d0 480d0))
+          (second-frame (list (+ (first frame) 60) (- (second frame) 60) 640d0 440d0)))
+      (setf (getf *remembered* :windows) (list first-frame second-frame))
+      (check-step (eql 2 (restore-windows listener)) "two windows remembered are two restored")
+      (pump-for 0.5d0)
+      (check-step (equal (window-frame-list window) first-frame)
+                  "the first where it was")
+      (let ((second (find listener *listeners* :test-not #'eq)))
+        (check-step (and second
+                         (equal (window-frame-list (listener-window second)) second-frame))
+                    "and a second listener opened where the second was")
+        (when second
+          (objc:invoke (listener-window second) "close")
+          (pump-for 0.5d0)))
+      (check-step (equal *listeners* (list listener)) "closing it leaves the first")
+      (objc:invoke window "setFrame:display:" (coerce frame 'vector) t)
+      (pump-for 0.2d0))))
+
 (defun run-debugger-test ()
   "Drive the pane and check it.  Exits 0 only when every check held."
   (let ((listener *listener*)
@@ -514,6 +677,8 @@ condition and not the application's."
     (debugger-test-two-listeners listener)
     (debugger-test-files listener directory)
     (debugger-test-canvas listener directory)
+    (debugger-test-settings listener directory)
+    (debugger-test-windows listener)
     (note "debugger-test: ~:[~d FAILED~;PASS~]"
           (zerop *debugger-test-failures*) *debugger-test-failures*)
     (finish-and-exit (if (zerop *debugger-test-failures*) 0 1))))

@@ -101,6 +101,35 @@ with NIL and builds a fresh one.")
                                      (objc:invoke (objc:invoke panel "URL") "path")))))
     (error (condition) (note "listenerSaveTranscript: ~a" condition))))
 
+(objc:define-objc-method ("listenerSaveCanvas:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  (handler-case
+      (let ((panel (objc:invoke "NSSavePanel" "savePanel")))
+        (objc:invoke panel "setNameFieldStringValue:" "Canvas.png")
+        (when (= (objc:invoke panel "runModal") +ns-modal-response-ok+)
+          (save-canvas-png (objc:ns-string-to-string
+                            (objc:invoke (objc:invoke panel "URL") "path")))))
+    (error (condition) (note "listenerSaveCanvas: ~a" condition))))
+
+(objc:define-objc-method ("listenerPreferences:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  (handler-case (show-preferences-window)
+    (error (condition) (note "listenerPreferences: ~a" condition))))
+
+(objc:define-objc-method ("listenerBigger:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  (handler-case (progn (change-font-size 1) (sync-preferences-window))
+    (error (condition) (note "listenerBigger: ~a" condition))))
+
+(objc:define-objc-method ("listenerSmaller:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  (handler-case (progn (change-font-size -1) (sync-preferences-window))
+    (error (condition) (note "listenerSmaller: ~a" condition))))
+
 (objc:define-objc-method ("listenerClearTranscript:" :void)
     ((self listener-controller) (sender objc:objc-object-pointer))
   (declare (ignorable sender))
@@ -190,6 +219,15 @@ with NIL and builds a fresh one.")
   ;; unwinding had run.  There, closing the last window stops -run instead.
   (not *stop-run-loop-on-last-close*))
 
+;;; Quit with windows open: where they are is what a relaunch puts back.  (When
+;;; it is the last window closing that ends the application, -windowWillClose:
+;;; has recorded that one already, and there is none left to record here.)
+(objc:define-objc-method ("applicationWillTerminate:" :void)
+    ((self listener-application-delegate) (notification objc:objc-object-pointer))
+  (declare (ignorable notification))
+  (handler-case (remember-windows)
+    (error (condition) (note "applicationWillTerminate: ~a" condition))))
+
 ;;; Building it ---------------------------------------------------------------
 
 (defun build-listener (&key (title "Lisp Listener") (activation-policy 0))
@@ -210,8 +248,10 @@ try to reach thread 1 before there is a view to deliver the hop to."
     ;; Before the thread starts, so that what it sets -- the keymap, the font --
     ;; is in force from the banner onwards.  Only for the first listener: a
     ;; second window must not run somebody's init file again.  The canvas's
-    ;; names go into CL-USER first, so that an init file may draw.
+    ;; names go into CL-USER first, so that an init file may draw; and the
+    ;; preferences before it, so that it has the last word.
     (install-user-vocabulary)
+    (load-preferences)
     (load-init-file))
   (objc.runloop:shared-application :activation-policy activation-policy)
   (let ((listener (make-listener))
@@ -364,7 +404,10 @@ Does not return: -[NSApplication run] does not."
   (objc:ensure-objc-initialized :modules (list +cocoa-framework+))
   (require-window-server)
   (isolate-driven-history)
-  (build-listener)
+  ;; Where the windows were, and how many -- for the application only: a
+  ;; listener borrowed from somebody's REPL opens the one window it was asked
+  ;; for.  A driven run's preferences are its own and empty, so it is unmoved.
+  (restore-windows (build-listener))
   (cond
     ((uiop:getenv "LISP_LISTENER_SCREENSHOT") (schedule-screenshots 1.0))
     ((uiop:getenv "LISP_LISTENER_DEBUGGER_TEST") (schedule-debugger-test 1.0))

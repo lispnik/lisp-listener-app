@@ -119,21 +119,27 @@ about, between a query being typed and the table being told to reload."
            (show-history-popup listener)
            t))))
 
+(defun put-at-prompt (listener text)
+  "Make TEXT the pending input, with the caret after it.  Thread 1.  Answers
+TEXT, or NIL when LISTENER has no view to put it in."
+  (let ((view (and listener (listener-view-object listener)))
+        (pointer (and listener (listener-view listener))))
+    (when (and view pointer text)
+      (replace-pending-input view pointer text)
+      (let ((end (transcript-length pointer)))
+        (objc:invoke pointer "setSelectedRange:" (cons end 0))
+        (objc:invoke pointer "scrollRangeToVisible:" (cons end 0)))
+      (refresh-paren-highlight view pointer)
+      text)))
+
 (defun choose-history-line (listener line)
   "Put LINE in the input region, ready to edit, and take the list down.
 
 Thread 1.  Deliberately NOT submitted: what you wanted is usually a small edit
 away from what you ran before."
-  (let ((view (and listener (listener-view-object listener)))
-        (pointer (and listener (listener-view listener))))
-    (when (and view pointer line)
-      (hide-history-popup listener)
-      (replace-pending-input view pointer line)
-      (let ((end (transcript-length pointer)))
-        (objc:invoke pointer "setSelectedRange:" (cons end 0))
-        (objc:invoke pointer "scrollRangeToVisible:" (cons end 0)))
-      (refresh-paren-highlight view pointer)
-      line)))
+  (when (and listener line (listener-view listener))
+    (hide-history-popup listener)
+    (put-at-prompt listener line)))
 
 (defun choose-history-row (listener row)
   "Choose the line at ROW.  What a double click and Return both do."

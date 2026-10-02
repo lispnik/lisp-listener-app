@@ -36,7 +36,8 @@ make demo           # => build/demo/lisp-listener-demo.mp4 (needs ffmpeg, ImageM
 make ios-toolchain  # once: asdf-ios-app builds the host and iOS ECLs (~10 min)
 make ios            # => build/iphonesimulator/Lisp Listener.app
 make run-ios        # build, install and launch in the booted simulator
-make ios-demo       # => build/ios-demo/lisp-listener-ios-demo.mp4, from the self-test
+make test-ios       # the self-test, in an iPhone simulator and an iPad one
+make ios-demo       # => build/ios-demo/{iphone,ipad}/lisp-listener-ios-demo.mp4, from the self-test
 make ios-device     # a signed development build for a phone (local.mk)
 make testflight     # an App Store .ipa, checked, validated, uploaded (doc/testflight.md)
 ```
@@ -136,13 +137,13 @@ order is load-bearing**:
 
 - `lisp-listener/core` — `src/`: `package impl main-thread queue listener history
   sexp paredit keymap indent transcript completion paren-highlight paredit-view
-  history-search streams config restarts files canvas examples repl`. No
-  toolkit; SBCL and ECL.
+  history-search streams config restarts preferences files canvas examples
+  repl`. No toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
-  history-panel canvas-window screenshot debugger-test demo app`. The name it
-  always had.
+  history-panel canvas-window preferences-window screenshot debugger-test demo
+  app`. The name it always had.
 - `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet
-  history-sheet canvas-sheet app`.
+  history-sheet canvas-sheet settings-sheet app`.
 
 `tools/compile-check.lisp` and `tools/headless-test.lisp` each carry the same
 lists by hand; a new file has to be added in all three places. The core also
@@ -156,7 +157,8 @@ nickname, `gray-streams`. `impl.lisp` also declaims what each front end must
 define: `transcript-color`, `transcript-font`, `main-thread-run-loop-modes`,
 `show-restarts-panel`, `hide-restarts-panel`, `restarts-panel-visible-p`,
 `current-listener`, the canvas's five (`canvas-toolkit`, `show-canvas`,
-`hide-canvas`, `canvas-visible-p`, `redisplay-canvas`), and the class
+`hide-canvas`, `canvas-visible-p`, `redisplay-canvas`, and `save-canvas-png`
+and `documents-directory` for `(save …)`), and the class
 `listener-text-view`, with the same slots on
 both. The core only ever touches that class through `-textStorage`,
 `-selectedRange`, `-scrollRangeToVisible:` and `-typingAttributes`, which
@@ -220,6 +222,14 @@ NSTextView and UITextView share.
   `save-transcript`. The panels are `src/macos/app.lisp`'s, the drop is the
   view's `-performDragOperation:`, which leaves anything not Lisp to the text
   view.
+- `src/preferences.lisp` — the settings a window can change, and what the
+  application remembers for itself (where its windows were), in one plist,
+  `preferences.lisp-expr`, beside the history: read with `*read-eval*` off,
+  loaded **before** `init.lisp`, which therefore wins. `(setf (preference
+  :font-size) 16)` sets the variable, applies it and saves. Not
+  NSUserDefaults: this is one mechanism on both platforms, `make test` covers
+  it, and a driven run -- whose history directory is its own -- starts from
+  the defaults without being told.
 - `src/canvas.lisp` — a canvas to draw on from the prompt, and the `CANVAS`
   package's functions (`line`, `circle`, `forward`, `frame`, `key`...), which
   `install-user-vocabulary` imports into `CL-USER` when the first listener
@@ -231,9 +241,14 @@ NSTextView and UITextView share.
   is animation. The **painter is here, for both toolkits** (`paint-canvas`):
   both views are flipped, `canvas-device-ops` turns y over and gathers
   neighbouring lines into one path, and `canvas-toolkit` picks between the
-  three selectors NSBezierPath and UIBezierPath disagree on.
+  three selectors NSBezierPath and UIBezierPath disagree on. `(pointer)` is
+  the mouse or a finger, reported by the front end in the view's coordinates
+  (`canvas-pointer-event`) and a press is also the key `:click`. `(save
+  "x.svg")` writes the display list out, all here; `(save "x.png")` is the
+  front end's `save-canvas-png`, on thread 1, waited for.
 - `src/examples.lisp` — `(examples)`, `(example "snake")`,
-  `(example-source "snake")`. The six programs are `examples/*.lisp`, **read
+  `(example-source "snake")`, and `(example-edit "snake")`, which puts the
+  source at the prompt. The twelve programs are `examples/*.lisp`, **read
   into the image as strings when this file is compiled** (`embedded-examples`):
   an app has no source tree beside it. Run by reading and evaluating each form
   in `CL-USER` on the listener thread; the Examples menu and the Try key only
@@ -275,20 +290,32 @@ NSTextView and UITextView share.
   application, made on first use beside the front listener, closed with the
   last listener. Drawing brings it forward but **leaves the keyboard at the
   prompt**; `(show)` is what makes it key, and a game calls it. `-keyDown:`
-  feeds `(key)`.
+  feeds `(key)`, the mouse methods feed `(pointer)` -- `-mouseMoved:` too,
+  which wants an `NSTrackingArea`, active always since the window is usually
+  not key -- and `-acceptsFirstMouse:` is true so the click that wakes the
+  window also lands.
+- `src/macos/preferences-window.lisp` — Settings… (⌘,): five checkboxes and a
+  pop-up of sizes over `src/preferences.lisp`, each in force at once. Closed
+  with the last listener, like the canvas. `src/macos/window.lisp` has the
+  other half of that file's job: `remember-windows` (as a window closes, and
+  at `-applicationWillTerminate:`) and `restore-windows` (from `main` only).
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
   produces `doc/screenshots/`, on a CI runner, on every push.
 - `src/macos/demo.lisp` — `LISP_LISTENER_DEMO=<dir>` plays a scripted session a
   key at a time and photographs each step; `tools/make-demo.sh` makes the
   captioned video, and `make demo` does both. A sheet is a window of its own, so
   it is composited in -- under the title bar, where a sheet hangs, not where its
-  frame says. CI makes it only on Run workflow (`workflow_dispatch`), arm64.
+  frame says -- and so is the canvas, which the demo parks over the listener's
+  lower right corner. `tools/make-gif.sh` cuts the README's `doc/canvas.gif`
+  out of the video by caption. CI makes it only on Run workflow
+  (`workflow_dispatch`), arm64.
 - `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the
   docked debugger through what a person does with it and checks each step:
   docking, frames and locals, the keys, the divider, the value field, Escape,
   a second level, the history sheet, a second listener beside the first,
-  File ▸ Open…, a dropped file and Save Transcript…, and the Examples menu
-  and the canvas.
+  File ▸ Open…, a dropped file and Save Transcript…, the Examples menu and the
+  canvas (its keys, its mouse, saving it), Settings and the View menu, and
+  the remembered windows.
   Exits 0 only if every check held; `macos.yml` runs it on
   both architectures. **Everything in the pane is AppKit, so the headless test
   reaches none of it**; every bug in the pane's first versions was found by
@@ -305,16 +332,32 @@ NSTextView and UITextView share.
   detent and draggable to full height. A restart that asks for a value asks
   in a `UITextField` under the heading, hidden until then; Return sends
   `1 42`, as on the Mac. A second section lists the frames, by name only.
-- `src/ios/canvas-sheet.lisp` — the canvas as a sheet at the medium detent,
-  with Done and a row of arrow buttons that are the keys `(key)` answers.
-  Buttons, not swipes: a sheet already has a meaning for a vertical drag.
-  Presented **without animation**, so that the restarts can go over it at once.
+- `src/ios/canvas-sheet.lisp` — the canvas's panel: Done, the view, and a row
+  of arrow buttons that are the keys `(key)` answers (buttons, not swipes: a
+  sheet already has a meaning for a vertical drag). **Docked** beside the
+  transcript where the window is at least 700 points wide -- an iPad -- by
+  switching the transcript's trailing constraint (`*transcript-trailing*`) for
+  one to the panel; otherwise a **sheet** at the medium detent, presented
+  without animation so that the restarts can go over it at once. A
+  zero-length `UILongPressGestureRecognizer` is the finger for `(pointer)`:
+  it begins the instant a touch lands, so the sheet's own pan never sees a
+  stroke drawn downwards. `save-canvas-png` paints into a
+  `UIGraphicsImageRenderer` through a block. `replace-canvas` moves a canvas
+  that is up between the two when the width crosses the line; the transcript's
+  `-layoutSubviews` is what notices (`note-canvas-room`), and the move is
+  scheduled for the next pass of the run loop, never made inside the layout.
+- `src/ios/settings-sheet.lisp` — Settings, from the ⚙ key or ⌘,: a `UISwitch`
+  per switch and a `UIStepper` for the size, each through `(setf preference)`.
+  Built afresh on each show, so it says what is in force.
 - `src/ios/app.lisp` — `ios-start`, the self-test, and `open-url`: `.lisp` is
   the app's document type (`lisp-listener-ios.asd`), asdf-ios-app's scene
   delegate hands a URL from Files to `ios-app-runtime:*open-url-hook*`, and the
   hook copies the file in if it is not the app's own (`import-opened-file`, in
   `src/files.lisp`) and types `(load "…")`. `UIFileSharingEnabled` with
   `LSSupportsOpeningDocumentsInPlace` puts the app's Documents in the Files app.
+  `show-open-picker` (the Open key, ⌘O) is the same from inside: a
+  `UIDocumentPickerViewController`, opening in place, with the copy made while
+  the security scope is held.
 
 `lisp-alien.png` is the icon's source art, and `res/` is what the two builders
 take: `res/icon.png`, the alien inset in a rounded rectangle, which
@@ -330,6 +373,11 @@ either bundle in `lisp-listener.asd` would make its builder a hard requirement
 for anyone who only wants to load the library.
 
 ## CI
+
+`ios.yml` cross-compiles the iOS app with ECL -- asdf-ios-app checked out
+beside this repository at its master and ahead of everything else on the
+registry, its cross-built ECLs cached by ECL commit, build script and patches
+-- and runs `tools/ios-selftest.sh` in an iPhone and an iPad simulator.
 
 `check.yml` runs the three checks on Linux in seconds. `macos.yml` builds SBCL
 `--with-sb-safepoint` (cached, pinned to a tag), verifies the build really has
@@ -546,6 +594,36 @@ Each of these is a bug that actually happened here.
   nil for a row counted earlier, and UITableView's assertion killed the app.
   Only the iPad simulator showed it. `make-blank-cell` is the answer for any
   row the controller no longer has.
+
+- **A driven run stalls for minutes when the display is asleep.** Sheets and
+  window ordering wait on a display that is not there: the debugger test took
+  fifteen minutes instead of fifty seconds, with the stall in a different
+  place each time, and looked exactly like a hang in whatever had just been
+  changed. Run it under `caffeinate -d -u` when nobody is at the machine. (A
+  CI runner's display never sleeps.)
+
+- **Two filled boxes that meet on the canvas must meet on the screen.** Scaled
+  and left where they fell, each edge was antialiased on its own and a grid of
+  boxes had a hairline between every row -- the Mandelbrot set looked ruled.
+  `canvas-device-ops` puts a filled rectangle's EDGES on whole points and
+  takes its size from them.
+
+- **The demo cannot photograph a game at the speed it is played.** A frame is
+  two window captures and a composite, which is longer than a turn of Snake;
+  turns went by unseen and the scripted keys, keyed to turn numbers, were
+  never pressed. `*canvas-time-scale*` slows the game five times,
+  `*canvas-frames*` says when there is a new picture, and a key that was due
+  is pressed late rather than never.
+
+- **A presentation that does not take says nothing, and nothing asks again.**
+  UIKit will not present over a sheet still on its way out, and a sheet
+  dismissed without animation is still not gone until the run loop has turned.
+  Choose an example from the Try list and press Return quickly, and the canvas
+  was asked for while the list was leaving: no canvas, and the drawing was
+  finished, so no further redisplay came to try again. One self-test run in
+  several. `present-canvas-sheet` looks afterwards and tries again a quarter
+  of a second later, twelve times; `replace-canvas` leaves a canvas docked
+  while its old sheet is still up.
 
 - **UIKit presents only from the top of the stack.** Asked to present from a
   controller that is already presenting, it logs a warning and does nothing: an

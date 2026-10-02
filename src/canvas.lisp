@@ -63,9 +63,15 @@ that frame's shapes, newest first.  NIL otherwise.")
   "How many times the canvas has been painted.  For the drivers, which need to
 know that -drawRect: really ran.")
 
+(defvar *canvas-frames* 0
+  "How many whole pictures FRAME has swapped in.  For the demo, which
+photographs an animation a frame at a time and has to know when there is a new
+one.")
+
 (defparameter *canvas-time-scale* 1
   "What WAIT multiplies its seconds by.  `make test' sets it to 0, so that an
-animation runs to its end at once.")
+animation runs to its end at once, and the demo sets it to 3, so that each
+frame of a game stays up long enough to be photographed.")
 
 ;;; The pen and the turtle.  Written only by whoever is drawing.
 
@@ -147,7 +153,8 @@ and (frame ...) draws a picture that replaces the last one."
     (let ((ops (car *canvas-frame*)))
       (bt:with-lock-held (*canvas-lock*)
         (setf *canvas-ops* ops
-              *canvas-op-count* (length ops)))))
+              *canvas-op-count* (length ops))
+        (incf *canvas-frames*))))
   (request-canvas-redisplay)
   (values))
 
@@ -403,6 +410,53 @@ any other key is its character.  It never waits, so a game can ask every turn."
         (setf *canvas-keys* (append *canvas-keys* (list key))))))
   key)
 
+;;; The pointer ----------------------------------------------------------------------
+;;;
+;;; A mouse on the Mac, a finger on a phone.  The front end reports where it is
+;;; in the view's own coordinates; here that becomes canvas units, and a press
+;;; is also a key, :CLICK, so that a game which reads keys hears a tap.
+
+(defvar *canvas-pointer* (list 0d0 0d0 nil)
+  "Where the pointer last was, in canvas units, and whether it is down.
+Under *CANVAS-LOCK*.")
+
+(defun canvas:pointer ()
+  "Where the mouse or the finger is on the canvas, and whether it is down:
+three values, x, y, and true while the button is held or the finger is on.
+A mouse is followed whether its button is down or not; a finger only while it
+touches.
+
+    (dotimes (i 500)                      ; draw with it, for ten seconds
+      (multiple-value-bind (x y down) (pointer)
+        (when down (dot x y 1)))
+      (wait 0.02))
+
+A press is also a key: (key) answers :click for it."
+  (bt:with-lock-held (*canvas-lock*)
+    (values-list *canvas-pointer*)))
+
+(defun canvas-point-from-view (x y width height)
+  "The canvas's (x . y) for a point in a view WIDTH by HEIGHT whose y runs
+down: CANVAS-DEVICE-OPS, backwards."
+  (let ((scale (/ (max 1d0 (min width height)) 200d0)))
+    (cons (/ (- x (/ width 2d0)) scale)
+          (/ (- (/ height 2d0) y) scale))))
+
+(defun canvas-pointer-event (phase x y width height)
+  "The pointer went :DOWN, did a :MOVE, or came :UP at (X, Y) in a view WIDTH
+by HEIGHT.  Thread 1; what both front ends call."
+  (let ((point (canvas-point-from-view x y width height)))
+    (bt:with-lock-held (*canvas-lock*)
+      (setf *canvas-pointer*
+            (list (car point) (cdr point)
+                  (ecase phase
+                    (:down t)
+                    (:move (third *canvas-pointer*))
+                    (:up nil))))))
+  (when (eq phase :down)
+    (canvas-push-key :click))
+  phase)
+
 (defun canvas-key-for-character (character)
   "What KEY answers for a character from a keyboard event: a keyword for the
 keys that have no character worth the name, and the character otherwise."
@@ -463,8 +517,18 @@ several hundred lines, and one path stroked once is a fifth of the sends."
            (destructuring-bind (color pen fill x y w h) (rest op)
              ;; The corner given is the bottom left; flipped, the top left is
              ;; the one HEIGHT further up.
-             (extend :rects (list color (* pen scale) fill)
-                     (dx x) (dy (+ y h)) (* w scale) (* h scale))))
+             (if fill
+                 ;; A filled one has its EDGES put on whole points, and its
+                 ;; size taken from them: two boxes that meet on the canvas
+                 ;; then meet on the screen.  Scaled and left where they fell,
+                 ;; each edge was antialiased on its own, and a grid of boxes
+                 ;; -- the Mandelbrot set -- had a hairline between every row.
+                 (let ((left (fround (dx x))) (right (fround (dx (+ x w))))
+                       (top (fround (dy (+ y h)))) (bottom (fround (dy y))))
+                   (extend :rects (list color (* pen scale) fill)
+                           left top (- right left) (- bottom top)))
+                 (extend :rects (list color (* pen scale) fill)
+                         (dx x) (dy (+ y h)) (* w scale) (* h scale)))))
           (:oval
            (flush)
            (destructuring-bind (color pen fill x y w h) (rest op)
@@ -564,6 +628,96 @@ several hundred lines, and one path stroked once is a fifth of the sends."
   (incf *canvas-paints*)
   (values))
 
+;;; Saving ---------------------------------------------------------------------------
+;;;
+;;; (save "name.png") is the canvas as the view paints it, which is the front
+;;; end's to do; (save "name.svg") is the display list written out as SVG, which
+;;; is all here, the same on both, and what `make test' can check.
+
+(defun canvas-save-path (name)
+  "Where NAME goes: itself if it says where, and otherwise among the person's
+own files -- ~/Pictures on the Mac, the app's folder on a phone.  .png when it
+names no type."
+  (let* ((path (pathname name))
+         (path (if (pathname-type path) path (make-pathname :type "png" :defaults path))))
+    (merge-pathnames path (or (ignore-errors (documents-directory))
+                              *default-pathname-defaults*))))
+
+(defun svg-color (color)
+  (destructuring-bind (red green blue alpha) color
+    (format nil "rgb(~d,~d,~d)~:[~;\" opacity=\"~,2f~]"
+            (round (* 255 red)) (round (* 255 green)) (round (* 255 blue))
+            (< alpha 1) alpha)))
+
+(defun svg-escape (string)
+  (with-output-to-string (out)
+    (loop for character across string
+          do (case character
+               (#\< (write-string "&lt;" out))
+               (#\> (write-string "&gt;" out))
+               (#\& (write-string "&amp;" out))
+               (t (write-char character out))))))
+
+(defun write-canvas-svg (stream)
+  "The canvas as an SVG document.  Its y runs down, so every y is turned over;
+otherwise the numbers are the canvas's own."
+  (let ((*read-default-float-format* 'double-float))
+    (flet ((up (y)
+             ;; From zero, not negated: -0.0 prints as "-0.00".
+             (- 0d0 y))
+           (paint (color width fill)
+             (if fill
+                 (format nil "fill=\"~a\"" (svg-color color))
+                 (format nil "fill=\"none\" stroke=\"~a\" stroke-width=\"~,2f\""
+                         (svg-color color) width))))
+      (format stream "<svg xmlns=\"http://www.w3.org/2000/svg\" ~
+viewBox=\"-100 -100 200 200\" width=\"800\" height=\"800\">~%")
+      (format stream "<rect x=\"-100\" y=\"-100\" width=\"200\" height=\"200\" fill=\"~a\"/>~%"
+              (svg-color *canvas-background*))
+      (dolist (op (canvas-contents))
+        (ecase (first op)
+          (:line
+           (destructuring-bind (color pen x1 y1 x2 y2) (rest op)
+             (format stream "<line x1=\"~,2f\" y1=\"~,2f\" x2=\"~,2f\" y2=\"~,2f\" ~
+stroke=\"~a\" stroke-width=\"~,2f\" stroke-linecap=\"round\"/>~%"
+                     x1 (up y1) x2 (up y2) (svg-color color) pen)))
+          (:oval
+           (destructuring-bind (color pen fill x y w h) (rest op)
+             (format stream "<ellipse cx=\"~,2f\" cy=\"~,2f\" rx=\"~,2f\" ry=\"~,2f\" ~a/>~%"
+                     (+ x (/ w 2)) (up (+ y (/ h 2))) (/ w 2) (/ h 2) (paint color pen fill))))
+          (:rect
+           (destructuring-bind (color pen fill x y w h) (rest op)
+             (format stream "<rect x=\"~,2f\" y=\"~,2f\" width=\"~,2f\" height=\"~,2f\" ~a/>~%"
+                     x (up (+ y h)) w h (paint color pen fill))))
+          (:text
+           (destructuring-bind (color size x y string) (rest op)
+             (format stream "<text x=\"~,2f\" y=\"~,2f\" font-size=\"~,2f\" ~
+font-family=\"Menlo, monospace\" fill=\"~a\">~a</text>~%"
+                     x (up y) size (svg-color color) (svg-escape string))))))
+      (format stream "</svg>~%")))
+  (values))
+
+(defun canvas:save (name)
+  "Save the canvas as a picture, and answer where it went.
+
+\"name.png\" is the canvas as it looks; \"name.svg\" is the drawing itself,
+which stays sharp at any size.  A name with no directory goes among your own
+files: ~/Pictures on the Mac, the app's folder in Files on a phone."
+  (let ((path (canvas-save-path name)))
+    (ensure-directories-exist path)
+    (cond ((string-equal (pathname-type path) "svg")
+           (with-open-file (out path :direction :output :if-exists :supersede
+                                     :external-format :utf-8)
+             (write-canvas-svg out)))
+          ((not (string-equal (pathname-type path) "png"))
+           (error "The canvas can be saved as .png or .svg, not .~a." (pathname-type path)))
+          ((null *main-thread-target*)
+           (error "There is no window to take a picture of.  (save \"name.svg\") needs none."))
+          (t
+           ;; Waited for: the file should be there when this returns.
+           (on-main-thread (:wait t) (save-canvas-png (namestring path)))))
+    (truename path)))
+
 ;;; The names, in CL-USER ------------------------------------------------------------
 
 (defun install-user-vocabulary (&optional (package (find-package "COMMON-LISP-USER")))
@@ -590,7 +744,7 @@ the reader merely interned -- typed once, never defined -- is replaced."
                      (t (push symbol skipped))))))
       (do-external-symbols (symbol (find-package "CANVAS"))
         (bring symbol))
-      (dolist (symbol '(examples example example-source))
+      (dolist (symbol '(examples example example-source example-edit))
         (bring symbol)))
     (when skipped
       (note "canvas: ~{~a~^, ~} already had a meaning in ~a; write CANVAS:~a there"

@@ -1,0 +1,173 @@
+# The iOS app: cross-compiled with ECL for the simulator, and its self-test run
+# in an iPhone and an iPad.
+#
+# Until this, nothing built the iOS half anywhere but on one desk.  check.yml
+# compiles src/ios/ against stubs, on SBCL -- which says the Lisp is well
+# formed, and nothing about whether asdf-ios-app can still build it, whether
+# ECL's compiler accepts it, or whether it runs.  Each of those has broken:
+# a hook this repository needed from asdf-ios-app, a build that shipped
+# yesterday's examples, and a crash on Cancel that only an iPad showed.
+#
+# ECL, not SBCL: asdf-ios-app drives ECL's own C backend and loads under
+# nothing else.  A stock `brew install ecl' drives the build; the ECLs the app
+# is compiled and linked with are cross-built by asdf-ios-app's BOOTSTRAP-ECL,
+# which is twenty minutes cold and is cached by the ECL commit, the build
+# script and its patches -- any of the three changes what gets built.
+#
+# asdf-ios-app is checked out beside this repository, at its master, and is
+# AHEAD of everything else on the registry: this app is the largest thing built
+# with it, and is meant to break here when it breaks there.  objc and the rest
+# come from ocicl.csv, pinned, as they do for the Mac.
+#
+# The device is not built for.  Signing needs an identity and a profile a
+# runner does not have.
+
+name: iOS
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  IOS_APP_REPO: lispnik/asdf-ios-app
+  IOS_APP_REF: master
+  ECL_REPOSITORY: https://github.com/lispnik/ecl.git
+  ECL_BRANCH: develop
+  # asdf-ios-app's checkout, not recursive -- its examples are systems too, and
+  # are none of this build's business.  The Makefile puts this repository's
+  # tree, ocicl/ included, in front; the trailing colon inherits the rest.
+  CL_SOURCE_REGISTRY: "${{ github.workspace }}/asdf-ios-app/:"
+
+jobs:
+  simulator:
+    name: ecl · iphonesimulator, an iPhone and an iPad
+    runs-on: macos-latest
+    # Twenty minutes of ECL when the cache misses; the app is three or four,
+    # and two simulators booting and running the self-test about as much again.
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out sbcl-macos
+        uses: actions/checkout@v7
+        with:
+          path: sbcl-macos
+
+      - name: Check out asdf-ios-app beside it
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.IOS_APP_REPO }}
+          ref: ${{ env.IOS_APP_REF }}
+          path: asdf-ios-app
+
+      # ECL to drive the build; SBCL only because ocicl's installer is an SBCL
+      # program.  What ocicl produces is a directory of source, used from ECL.
+      - name: Install ECL and SBCL
+        run: brew install ecl sbcl
+
+      - name: Resolve the ECL branch to a commit
+        id: ecl
+        run: |
+          sha=$(git ls-remote "$ECL_REPOSITORY" "refs/heads/$ECL_BRANCH" | cut -f1)
+          test -n "$sha" || { echo "::error::$ECL_REPOSITORY has no branch $ECL_BRANCH" >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "$ECL_BRANCH is $sha"
+
+      # The prefixes and the record of where they are; not the source tree or
+      # the build directories, which are most of a gigabyte.
+      - name: Cache the cross-built ECL
+        id: ecl-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/asdf-ios-app/ecl-ios/host
+            ~/.cache/asdf-ios-app/ecl-ios/iphonesimulator
+            ~/.cache/asdf-ios-app/toolchain.sexp
+          key: ecl-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.ecl.outputs.sha }}-${{ hashFiles('asdf-ios-app/tools/build-ecl-ios.sh', 'asdf-ios-app/tools/patches/*') }}
+
+      - name: Cross-build ECL for the simulator
+        if: steps.ecl-cache.outputs.cache-hit != 'true'
+        working-directory: asdf-ios-app
+        run: |
+          brew install automake autoconf libtool texinfo
+          ecl --norc \
+            --eval '(require :asdf)' \
+            --eval '(asdf:initialize-source-registry (list :source-registry (list :directory (uiop:getcwd)) :ignore-inherited-configuration))' \
+            --eval '(asdf:load-system :asdf-ios-app)' \
+            --eval '(asdf-ios-app:bootstrap-ecl :platforms (list :simulator))' \
+            --eval '(ext:quit 0)'
+
+      - name: Install and configure ocicl
+        run: |
+          git clone --depth 1 https://github.com/ocicl/ocicl.git "$HOME/ocicl-src"
+          ( cd "$HOME/ocicl-src" && sbcl --non-interactive --load setup.lisp )
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore dependencies
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          ocicl setup
+          cd sbcl-macos
+          # ocicl exits 0 when a download fails and ghcr.io fails often enough
+          # to matter, so: several attempts, and a failure here rather than a
+          # mystery later.
+          for attempt in 1 2 3 4 5; do
+            ocicl install 2>&1 | tee "$RUNNER_TEMP/ocicl-install.log"
+            if ! grep -q "failed to install" "$RUNNER_TEMP/ocicl-install.log"; then
+              break
+            fi
+            echo "::warning::ocicl install attempt $attempt did not get every package"
+            sleep 30
+          done
+          if grep -q "failed to install" "$RUNNER_TEMP/ocicl-install.log"; then
+            echo "::error::ocicl could not install every dependency after 5 attempts" >&2
+            exit 1
+          fi
+          echo "restored:" && ls ocicl
+
+      - name: Report the toolchain the build will see
+        working-directory: sbcl-macos
+        run: |
+          ecl --version
+          xcodebuild -version
+          ecl --norc \
+            --eval '(require :asdf)' \
+            --eval '(asdf:load-system :asdf-ios-app)' \
+            --eval '(asdf-ios-app:describe-toolchain)' \
+            --eval '(ext:quit)'
+
+      - name: The headless test, on ECL
+        # The Lisp the app runs on.  check.yml does this on Linux; here it is
+        # the ECL that is about to drive the build.
+        working-directory: sbcl-macos
+        run: make test-ecl
+
+      - name: Build the app for the simulator
+        working-directory: sbcl-macos
+        run: |
+          set -o pipefail
+          make ios 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
+          test -d "build/iphonesimulator/Lisp Listener.app" \
+            || { echo "::error::make ios left no app" >&2; exit 1; }
+          plutil -p "build/iphonesimulator/Lisp Listener.app/Info.plist" \
+            | grep -A3 "UIDeviceFamily"
+
+      - name: Run the self-test in an iPhone and an iPad
+        # tools/ios-selftest.sh picks the newest runtime's first of each, boots
+        # it, runs the app with LISP_LISTENER_SELF_TEST, and reads the verdict
+        # out of the app's console.log.  The pictures are kept below.
+        working-directory: sbcl-macos
+        env:
+          SHOTS: ${{ runner.temp }}/ios-shots
+          HOLD: "1"
+        run: tools/ios-selftest.sh
+
+      - name: Keep the pictures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-self-test
+          path: |
+            ${{ runner.temp }}/ios-shots
+            ${{ runner.temp }}/ios-build.log
+          if-no-files-found: ignore

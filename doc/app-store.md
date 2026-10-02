@@ -1,8 +1,13 @@
 # App Store Connect copy
 
 What to paste into the fields App Store Connect asks for, each within its
-limit. The TestFlight fields come first, because internal testing needs only
-those; the App Store fields are for when the app is submitted.
+limit, describing the app as it is now: the canvas, the examples, files from
+the Files app, and the iPad's docked canvas are all in the build. The
+TestFlight fields come first, because internal testing needs only those; the
+App Store fields are for when the app is submitted.
+
+Every field here was counted against its limit. Count again after an edit:
+App Store Connect refuses a field one character over.
 
 ## TestFlight › Test Information
 
@@ -21,14 +26,21 @@ anywhere and no account is needed.
 - An error opens a sheet of restarts, with the backtrace below. Tap one, and
   if it needs a value, type it there.
 - Stop interrupts a form that is still running.
+- There is a canvas to draw on: (circle 0 0 50). On an iPad it sits beside
+  the transcript; on a phone it is a sheet. It takes a finger, too.
+- Try lists twelve short examples -- a spiral, a fractal tree, the Mandelbrot
+  set, Conway's Life, Snake, Pong -- each a screen of Lisp to read and change.
+- Open loads a .lisp file from the Files app, and Files can open one in Lisp
+  Listener.
 - A bar above the keyboard has the keys a phone lacks: Tab, Esc, the arrows,
-  Hist, Clear and Stop. A hardware keyboard gets the same keys as on a Mac.
+  Hist, Try, Open, Clear, Stop and a gear for Settings. A hardware keyboard
+  gets the same keys as on a Mac.
 ```
 
 **What to Test** (4000)
 
 ```
-This is the first build. The things most worth trying:
+The things most worth trying:
 
 1. Type (+ 1 2) and press Return. Then something with output:
    (dotimes (i 3) (print i))
@@ -38,8 +50,21 @@ This is the first build. The things most worth trying:
 4. Type (loop) and press Return, then Stop on the key bar. The prompt should
    come back.
 5. Tap Hist to search what you have typed, and tap a row to bring it back.
-6. Rotate the device, and try it on an iPad with a keyboard if you have one:
-   Option-Return starts a new indented line, Cmd-. stops, Cmd-K clears.
+6. Tap Try, choose (example "spiral") and press Return: a canvas comes up with
+   the drawing. Then (example "snake"), steered with the arrows under the
+   canvas, and (example "doodle"), which draws where your finger goes.
+7. Draw something yourself: (circle 0 0 50), then (forward 40) (right 90) a
+   few times. (save "mine.png") puts the picture in the app's folder in Files.
+8. In the Files app, long-press a .lisp file, choose Share or Open With, and
+   pick Lisp Listener: it should load, with the (load ...) shown at the prompt.
+   Open on the key bar does the same from inside the app.
+9. On an iPad, the canvas should sit beside the transcript and leave you the
+   keyboard. With a hardware keyboard: Option-Return starts a new indented
+   line, Cmd-. stops, Cmd-K clears, Cmd-+ and Cmd-- change the size of the type.
+10. Tap the gear at the end of the key bar: the switches should take effect at
+    once, and the stepper should resize everything in the transcript.
+11. Rotate the device. On an iPad with the canvas up, narrow the window: the
+    canvas should become a sheet, and dock again when there is room.
 
 Please report anything that hangs, any key that does nothing, and any place
 the keyboard covers what you are typing.
@@ -53,10 +78,11 @@ the keyboard covers what you are typing.
 
 ```
 Lisp Listener is a programming environment: a Common Lisp REPL (ECL) that
-evaluates code the user types on the device. It is an educational and
-developer tool. It downloads no code, has no network features, no accounts
-and no in-app purchases, and collects no data. To try it, type (+ 1 2) and
-press Return.
+evaluates code the user types on the device, with a canvas the code can draw
+on. It is an educational and developer tool. It downloads no code, has no
+network features, no accounts and no in-app purchases, and collects no data.
+The examples it lists are part of the app. To try it, type (+ 1 2) and press
+Return, or tap Try and choose an example.
 ```
 
 ## App Store › App Information
@@ -64,7 +90,7 @@ press Return.
 | Field | Limit | Value |
 |---|---|---|
 | Name | 30 | `Lisp Listener` |
-| Subtitle | 30 | `Common Lisp REPL and debugger` |
+| Subtitle | 30 | `Common Lisp REPL and a canvas` |
 | Primary category | | Developer Tools |
 | Secondary category | | Education |
 | Content rights | | Does not contain third-party content |
@@ -75,7 +101,7 @@ press Return.
 **Promotional Text** (170; can be changed without a new build)
 
 ```
-A real Common Lisp in your pocket: type a form, get its value, and when it goes wrong, pick a restart. Paredit, completion, history and a debugger, all on the device.
+A real Common Lisp in your pocket: a REPL with paredit, completion and a debugger, and a canvas to draw on. Type (example "snake") and play what a page of Lisp can do.
 ```
 
 **Description** (4000)
@@ -90,7 +116,7 @@ WRITING LISP ON GLASS
 • The paren at the cursor and its partner are tinted, red when it has none.
 • Tab completes the symbol you are typing, from the current package.
 • Option-Return starts a new line indented the way Lisp is indented.
-• A bar above the keyboard has the keys a phone keyboard lacks: Tab, Esc, the arrows, history, Clear and Stop.
+• A bar above the keyboard has the keys a phone keyboard lacks: Tab, Esc, the arrows, history, examples, Open, Clear, Stop and Settings.
 
 A DEBUGGER, NOT A CRASH
 • An error opens a sheet listing the restarts, each with its report, exactly as Common Lisp's condition system offers them.
@@ -99,13 +125,23 @@ A DEBUGGER, NOT A CRASH
 • An error at a debugger prompt opens the next level down, as it should.
 • Stop interrupts a form that is still running.
 
-YOUR HISTORY
-• The arrows walk back through what you have typed.
-• History search narrows as you type and puts your choice back at the prompt to edit.
-• History is kept between launches.
+A CANVAS TO DRAW ON
+• (circle 0 0 50) draws a circle. So do lines, dots, boxes, text, the graph of a function, and a turtle that walks forward and turns.
+• On an iPad the canvas sits beside the transcript, so you type a form and watch what it draws. On an iPhone it is a sheet.
+• (frame ...) and (wait ...) animate. (key) reads the arrows under the canvas and (pointer) reads your finger, so a game is a page of code.
+• (save "mine.png") keeps the picture, in the app's folder in Files.
+
+TWELVE EXAMPLES TO TAKE APART
+• A rainbow spiral, a rose curve, a fractal tree, Sierpinski's triangle, the Mandelbrot set, a clock, bouncing balls, Conway's Life, a doodle, Snake and Pong.
+• Each is a screen of Lisp. Run one, read it, or put it at the prompt and change it.
+
+YOUR FILES AND YOUR HISTORY
+• Open a .lisp file from the Files app or a share sheet and it is loaded. The app's folder is in Files, so your own code is a tap away.
+• The arrows walk back through what you have typed, and history search narrows as you type.
+• Settings has the switches and the size of the type; they and your history are kept between launches.
 
 WITH A KEYBOARD
-On an iPad with a keyboard it works like a desktop Lisp: Tab, the arrows, Escape, Cmd-. to stop, Cmd-K to clear, Cmd-R to search, and Cmd-0 to Cmd-9 to choose a restart.
+On an iPad with a keyboard it works like a desktop Lisp: Tab, the arrows, Escape, Cmd-. to stop, Cmd-K to clear, Cmd-R to search, Cmd-O to open, Cmd-+ and Cmd-- for the size of the type, and Cmd-0 to Cmd-9 to choose a restart.
 
 OPEN SOURCE
 Lisp Listener is free and open source. The same listener runs on the Mac, with SBCL.
@@ -114,7 +150,7 @@ Lisp Listener is free and open source. The same listener runs on the Mac, with S
 **Keywords** (100, comma-separated, no spaces after commas)
 
 ```
-lisp,common lisp,repl,ecl,programming,code,interpreter,debugger,paredit,functional,sbcl,learn,coding
+lisp,common lisp,repl,ecl,programming,code,interpreter,debugger,turtle,graphics,learn,coding,sbcl
 ```
 
 **Support URL:** https://github.com/lispnik/sbcl-macos/issues
@@ -123,62 +159,28 @@ lisp,common lisp,repl,ecl,programming,code,interpreter,debugger,paredit,function
 
 **Copyright:** 2026 Matthew Kennedy
 
-## For a build with the canvas (0.1.52 on)
-
-Build 0.1.51, the first, has neither the canvas nor the examples, so nothing
-above mentions them. For a build that has them:
-
-**Beta App Description**, one more line:
-
-```
-- Try, on the bar above the keyboard, lists six short examples -- a spiral, a
-  fractal tree, Conway's Life, Snake -- that draw on a canvas you can draw on
-  too: (circle 0 0 50).
-```
-
-**What to Test**, one more step:
-
-```
-7. Tap Try, choose (example "spiral") and press Return. A canvas comes up with
-   the drawing. Then try (example "snake"), and steer with the arrows under it.
-```
-
-and, from 0.1.53, which opens files:
-
-```
-8. In the Files app, long-press a .lisp file, choose Share or Open With, and
-   pick Lisp Listener: it should load, with the (load ...) shown at the prompt.
-   The app's own folder is under On My iPhone > Lisp Listener.
-```
-
-**Description**, a section before WITH A KEYBOARD:
-
-```
-A CANVAS TO DRAW ON
-• (circle 0 0 50) draws a circle. So do lines, dots, boxes, text, the graph of a function, and a turtle that walks forward and turns.
-• Six short examples come with it: a rainbow spiral, a rose curve, a fractal tree, Conway's Life and a game of Snake. Each is a screen of Lisp you can read and change.
-• (frame ...) and (wait ...) animate, and (key) reads the arrows under the canvas, so a game is a dozen lines.
-```
-
-and one more line under YOUR HISTORY's section, or after it:
-
-```
-FILES
-• Open a .lisp file from the Files app or a share sheet and it is loaded. The app's folder is in Files, so your own code and init.lisp are a tap away.
-```
-
-**Promotional Text**, in place of the one above:
-
-```
-A real Common Lisp in your pocket: a REPL with paredit, completion and a debugger, and a canvas to draw on. Type (example "snake") and play what a page of Lisp can do.
-```
-
 ## App Privacy
 
 **Data Not Collected.** The app has no network code; nothing typed into it
-leaves the device. A privacy policy URL is still required for the App Store
-(not for internal TestFlight): a page saying exactly that is enough.
+leaves the device.
+
+**Privacy Policy URL:** https://github.com/lispnik/sbcl-macos/blob/main/PRIVACY.md
+
+Required for the App Store and for external TestFlight testers, not for
+internal ones. The page is `PRIVACY.md` at the top of the repository.
 
 ## Export compliance
 
 Already answered in the bundle: `ITSAppUsesNonExemptEncryption` is false.
+
+## Which build has what
+
+| Build | Adds |
+|---|---|
+| 0.1.51 | the listener: REPL, paredit, completion, history, the debugger sheet |
+| 0.1.52 | the canvas and six examples |
+| 0.1.53 | files from the Files app; the iPad crash on Cancel fixed |
+| 0.1.54 | a closed canvas stays closed |
+| next | touch on the canvas, the docked canvas on iPad, Open, saving a picture, twelve examples, Settings and the size of the type |
+
+Everything above describes the next build. Do not paste it over an older one.
