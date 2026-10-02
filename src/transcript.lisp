@@ -100,6 +100,16 @@ temporary going away afterwards is fine."
   (objc:invoke (objc:invoke "NSAttributedString" "alloc")
                "initWithString:attributes:" string (transcript-attributes kind)))
 
+(defparameter +value-link-prefix+ "lisp-listener-value:")
+
+(defun kind-base (kind)
+  "The kind of text KIND is, for its colour: KIND itself, or :VALUE for
+(:VALUE id), which is a value printed at the prompt and says which."
+  (if (consp kind) (first kind) kind))
+
+(defun kind-value-id (kind)
+  (and (consp kind) (second kind)))
+
 (defun transcript-insert (view string kind)
   "Insert STRING above the pending input, and move INPUT-START past it.
 
@@ -110,7 +120,7 @@ it would splice it into the middle of what they are typing.  Above the prompt
 is where it belongs and where a terminal puts it."
   (when (plusp (length string))
     (let* ((storage (transcript-storage view))
-           (attributed (make-attributed-string string kind))
+           (attributed (make-attributed-string string (kind-base kind)))
            (length (objc:invoke attributed "length"))
            (at (view-input-start view))
            (pointer (objc:objc-object-pointer view))
@@ -123,6 +133,14 @@ is where it belongs and where a terminal puts it."
       (clear-paren-highlight view pointer)
       (objc:invoke storage "insertAttributedString:atIndex:" attributed at)
       (objc:release attributed)
+      ;; A printed value is a link to the value itself, where there is an
+      ;; inspector to open it in.  (Where there is not -- iOS, for now -- a
+      ;; link would only be text the toolkit repaints blue.)
+      (when (and (kind-value-id kind) (inspector-capabilities))
+        (objc:invoke storage "addAttribute:value:range:"
+                     (%ns-string-constant "NSLinkAttributeName")
+                     (format nil "~a~d" +value-link-prefix+ (kind-value-id kind))
+                     (cons at length)))
       (incf (view-input-start view) length)
       ;; A caret in the input region has to move with it.  NSTextView carries
       ;; a caret at the insertion point along by itself; UITextView leaves it
@@ -237,6 +255,8 @@ Deleting the characters rather than assigning a fresh empty attributed string:
              (pending (pending-input view pointer)))
         (objc:invoke (transcript-storage pointer) "deleteCharactersInRange:"
                      (cons 0 (transcript-length pointer)))
+        ;; Nothing is left to click on, so nothing need be kept for it.
+        (forget-shown-values listener)
         (setf (view-input-start view) 0)
         (let ((prompt (listener-prompt listener)))
           (when prompt
@@ -357,3 +377,12 @@ The range arrives as a CONS: NSRange is the one Cocoa structure the bridge
 represents as a cons rather than a vector, which is the LispWorks manual's
 inconsistency and is load bearing."
   (>= (car range) (view-input-start view)))
+
+(defun inspect-shown-value (listener link)
+  "Open the inspector on the value a link in the transcript stands for.  LINK
+is the link's text.  True if it was one of ours and its value is still kept."
+  (when (and listener (eql 0 (search +value-link-prefix+ link)))
+    (let ((id (ignore-errors (parse-integer link :start (length +value-link-prefix+)))))
+      (multiple-value-bind (value kept) (and id (shown-value listener id))
+        (cond (kept (inspect-object value listener) t)
+              (t (note "inspect: that value is no longer kept") nil))))))

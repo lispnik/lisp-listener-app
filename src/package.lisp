@@ -72,3 +72,24 @@
    #:forward #:back #:left #:right #:pen-up #:pen-down #:home #:move-to
    ;; Animation and games.
    #:frame #:wait #:key #:pointer))
+
+;;; INSPECTOR is the third, and like CANVAS it holds only names: what somebody
+;;; writes to contribute a view of their own data to the inspector.  They are
+;;; defined in src/places.lisp, src/views.lisp and src/inspector.lisp, from
+;;; inside LISP-LISTENER.  NOT imported into CL-USER -- TEXT is the canvas's
+;;; there -- so a contribution says INSPECTOR:DEFINE-VIEW in full.
+(defpackage #:inspector
+  (:use)
+  (:export
+   ;; Contributing.
+   #:define-view #:define-controls #:note-changed
+   ;; Places: where a value is, and whether it may be changed.
+   #:place #:place-value #:place-label #:place-bound-p
+   #:place-supports-p #:place-accepts-p
+   #:slot-place #:element-place #:aref-place #:hash-place #:value
+   ;; Scenes: what a view answers.
+   #:table #:text #:stack #:section #:drawing
+   ;; Controls: what DEFINE-CONTROLS answers.
+   #:slider #:field #:toggle #:button
+   ;; Asking, from the prompt.
+   #:views #:show))

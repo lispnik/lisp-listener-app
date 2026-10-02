@@ -68,9 +68,13 @@ SETF is sequential, so oldest first is not a stylistic choice."
           (format stream "~&; No values~%")
           (dolist (value values)
             (fresh-line stream)
-            (handler-case (prin1 value stream)
-              (error (condition)
-                (format stream "#<unprintable ~a: ~a>" (type-of value) condition)))
+            ;; Each value is written as a kind of its own, (:VALUE id): the
+            ;; transcript makes that stretch of text a link to the value, and a
+            ;; click on it opens the inspector.  See TRANSCRIPT-INSERT.
+            (with-output-kind (stream (list :value (remember-shown-value listener value)))
+              (handler-case (prin1 value stream)
+                (error (condition)
+                  (format stream "#<unprintable ~a: ~a>" (type-of value) condition))))
             (terpri stream)))))
   values)
 
@@ -148,11 +152,17 @@ level of the evaluator, and three of them said less than one."
     (setf mine (subseq mine 0 (min (length mine) (if last-own (1+ last-own) 1))))
     (subseq mine 0 (min (length mine) count))))
 
-(defstruct (backtrace-frame (:constructor make-backtrace-frame (line locals)))
+(defstruct (backtrace-frame (:constructor make-backtrace-frame
+                                (line locals &optional local-values)))
   "One frame, printed: `0: (FOO 1 2)', and its locals as `N = 1' lines.
-Printed on the listener thread, while the stack is there to print."
+Printed on the listener thread, while the stack is there to print.
+
+LOCAL-VALUES are the locals themselves, in the same order: the lines are for
+reading, and these are for the inspector, which a double click on a local
+opens.  They are held only as long as the debugger level is."
   (line "")
-  (locals '()))
+  (locals '())
+  (local-values '()))
 
 (defparameter *local-value-length* 400
   "The most of a local's printed value kept.  *PRINT-LENGTH* and *PRINT-LEVEL*
@@ -199,7 +209,8 @@ drop some."
               for index from 0
               collect (make-backtrace-frame
                        (format nil "~2d: ~a" index (frame-line call))
-                       (mapcar #'local-line locals))))
+                       (mapcar #'local-line locals)
+                       (mapcar #'cdr locals))))
     (error (condition)
       (list (make-backtrace-frame
              (format nil "(the backtrace could not be taken: ~a)" condition)
@@ -464,6 +475,9 @@ binds it around LISTENER-LOOP."
           (*debugger-hook* debugger)
           (*listener-debugger-hook* debugger))
       (with-invoke-debugger-hook (debugger)
+       ;; (inspect x) is this program's inspector, not the Lisp's own, which
+       ;; converses on a terminal there is none of.
+       (with-inspect-hook (#'inspect-object)
        (print-banner listener)
        (loop
          ;; The only ABORT restart in the whole listener, so that aborting from
@@ -486,7 +500,7 @@ binds it around LISTENER-LOOP."
                    (setf live (listener-rep listener))))
              (declare (ignore ignored))
              (when aborted (note-abort listener)))
-           (unless live (return))))))))
+           (unless live (return)))))))))
 
 (defun note-abort (listener)
   "Say that the last form was abandoned.

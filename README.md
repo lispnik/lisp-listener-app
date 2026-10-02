@@ -18,12 +18,12 @@ it is defined from Lisp, through
 
 ![An error docks the debugger under the transcript: frames open to their locals, ⌘ and a number takes a restart, and a restart that needs a value asks for it](doc/demo.gif)
 
-**[The whole demo](https://github.com/lispnik/sbcl-macos/releases/latest/download/lisp-listener-demo.mp4)**
+**[The whole demo](https://github.com/lispnik/lisp-listener-app/releases/latest/download/lisp-listener-demo.mp4)**
 (a minute, captioned): typing, paredit, Option-Return, ⌘. and ⌘R, then the
 debugger. Made by `make demo`, which plays the session in the real window a key
 at a time and photographs it -- not a screen recording.
 
-**[Download the app](https://github.com/lispnik/sbcl-macos/releases/latest)**
+**[Download the app](https://github.com/lispnik/lisp-listener-app/releases/latest)**
 for Apple silicon or Intel: SBCL is inside it, and nothing else is needed.
 
 ![A listener session](doc/screenshots/session.png)
@@ -136,11 +136,12 @@ way, with y going up.
 They are ordinary functions in a package called `canvas`, imported into
 `cl-user` when a listener starts, and each has a docstring.
 
-Twelve short programs come with it, in the **Examples** menu (the **Try** key
+Thirteen short programs come with it, in the **Examples** menu (the **Try** key
 on a phone): a face, the spiral, a rose curve, a tree made of smaller trees,
 Sierpinski's triangle from a coin with three sides, the Mandelbrot set, a
 clock, bouncing balls, Conway's Life, a doodle to draw with the mouse or a
-finger, Snake and Pong. `(examples)` lists them, `(example "snake")` runs one,
+finger, Snake, Pong, and a hot plate that teaches the inspector a view of its
+own. `(examples)` lists them, `(example "snake")` runs one,
 `(example-source "snake")` prints it to read — none is longer than a screen —
 and `(example-edit "snake")` puts it at the prompt to change. Running one
 leaves what it defined, so after the spiral there is a `spiral` to call with an
@@ -150,6 +151,50 @@ Drawing happens on the listener thread and only ever makes a list; thread 1
 paints it. So a drawing that goes wrong lands in the debugger like any other
 error, Interrupt stops an animation, and `make test` runs every example with
 no window anywhere.
+
+### An inspector you can teach
+
+![A byte vector as a histogram beside its hex, and a hot plate with a contributed view and two sliders](doc/inspector.png)
+
+`(inspect x)` opens an inspector on `x`. So does **Listener ▸ Inspect** (⌘I),
+on the last value; a click on any value printed in the transcript; and a
+double click on a local in the debugger's frames.
+
+It shows two **views** of the thing side by side, chosen from every view that
+applies: a byte vector opens as a histogram beside its hex, a 2D array of
+floats as a heat map beside a surface, an instance as its slots. A double click
+on a row walks into that value, and the path across the top leads back.
+Select a row and the panel on the right has a field to change it — a form,
+evaluated — which the place refuses if it cannot hold the result: a byte
+vector will not take 999.
+
+**Anyone can contribute a view.** A view is matched by a type and, if that is
+not enough, a predicate; it is given the object and answers a *scene* — a
+table, some text, or a drawing made with the canvas's own functions. It draws
+nothing itself, which is why the same view is a picture in a window, text in a
+transcript, and something `make test` can check.
+
+```lisp
+(inspector:define-view (histogram
+                        :title "Histogram"
+                        :type (vector (unsigned-byte 8))
+                        :options ((bins 32 :integer :min 4 :max 256)))
+    (bytes &key bins)
+  (inspector:drawing ()
+    ...                       ; LINE, BOX, HUE: the canvas's functions
+    ))
+```
+
+Options — `bins` — are the view's own, and get a control above the view.
+**Controls** belong to the object: `inspector:define-controls` contributes
+sliders, fields, toggles and buttons bound to *places*, and moving one changes
+the object and redraws every view of it. `(example "thermal")` is the whole
+thing in forty lines: a hot plate, a view that shows the heat spreading, and
+two sliders that change it.
+
+`(inspector:views x)` lists the views that apply, and `(inspector:show x
+"Hex")` prints one as text. On iOS, for now, that is what `(inspect x)` does:
+the inspector's window is a Mac's.
 
 ### Settings
 

@@ -21,7 +21,7 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defparameter *example-names*
     '("hello" "spiral" "rose" "tree" "sierpinski" "mandelbrot"
-      "clock" "ball" "life" "doodle" "snake" "pong")
+      "clock" "ball" "life" "doodle" "snake" "pong" "thermal")
     "The examples, in the order the menu lists them.  A new one is a file in
 examples/, a name here, and a static file in lisp-listener.asd.")
 

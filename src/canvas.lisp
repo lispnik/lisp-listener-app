@@ -51,7 +51,9 @@ next shape is an error, which says what to do.")
   "While FRAME's body runs, on the thread running it: a cons whose car collects
 that frame's shapes, newest first.  NIL otherwise.")
 
-(defvar *canvas-background* '(0.07d0 0.08d0 0.11d0 1d0))
+(defparameter *canvas-default-background* '(0.07d0 0.08d0 0.11d0 1d0))
+
+(defvar *canvas-background* *canvas-default-background*)
 
 (defvar *canvas-keys* '()
   "Keys pressed in the canvas and not yet read, oldest first.  Under the lock.")
@@ -249,7 +251,10 @@ again -- so (hue (/ i 100)) inside a loop walks round it."
 (defun canvas:background (red &optional green blue)
   "Colour the canvas itself: (background :black), or three numbers."
   (setf *canvas-background* (canvas-color red green blue))
-  (request-canvas-redisplay)
+  ;; Inside a frame -- or an inspector's drawing, which is one -- the colour is
+  ;; that picture's, and there is no canvas to repaint for it.
+  (unless *canvas-frame*
+    (request-canvas-redisplay))
   (values))
 
 ;;; Shapes ---------------------------------------------------------------------------
@@ -475,7 +480,8 @@ keys that have no character worth the name, and the character otherwise."
 ;;;
 ;;; From here on, thread 1.
 
-(defun canvas-device-ops (width height)
+(defun canvas-device-ops (width height &optional (contents (canvas-contents))
+                                                 (canvas-background *canvas-background*))
   "What to paint in a view WIDTH by HEIGHT whose y runs DOWN -- both views are
 flipped, so that one painter does for both.  Answers the background and a list
 of operations, oldest first, in the view's own coordinates:
@@ -487,7 +493,11 @@ of operations, oldest first, in the view's own coordinates:
 
 Neighbouring lines of one colour and width are gathered into one operation, and
 rectangles likewise.  A send to Objective-C is the cost here, a turtle's walk is
-several hundred lines, and one path stroked once is a fifth of the sends."
+several hundred lines, and one path stroked once is a fifth of the sends.
+
+CONTENTS is the display list, oldest first, and CANVAS-BACKGROUND the colour
+behind it: the canvas's own unless given, which is how an inspector's drawing
+-- a list of the same shapes -- is painted by the same code."
   (let* ((scale (/ (min width height) 200d0))
          (cx (/ width 2d0))
          (cy (/ height 2d0))
@@ -507,7 +517,7 @@ several hundred lines, and one path stroked once is a fifth of the sends."
                  (setf run (list kind key)))
                (dolist (number numbers)
                  (push number (cddr run)))))
-      (dolist (op (canvas-contents))
+      (dolist (op contents)
         (ecase (first op)
           (:line
            (destructuring-bind (color pen x1 y1 x2 y2) (rest op)
@@ -543,7 +553,7 @@ several hundred lines, and one path stroked once is a fifth of the sends."
                (push (list :text color points (dx x) (- (dy y) (* 1.2d0 points)) string)
                      result))))))
       (flush))
-    (values *canvas-background* (nreverse result))))
+    (values canvas-background (nreverse result))))
 
 (defun canvas-class (name)
   "NSColor or UIColor, NSBezierPath or UIBezierPath."
@@ -614,10 +624,12 @@ several hundred lines, and one path stroked once is a fifth of the sends."
              (objc:invoke ns-string "drawAtPoint:withAttributes:"
                           (vector x y) attributes))))))))
 
-(defun paint-canvas (width height)
-  "Paint the canvas into the current graphics context: what both views'
--drawRect: do.  One bad shape is reported and the rest are still drawn."
-  (multiple-value-bind (background ops) (canvas-device-ops width height)
+(defun paint-shapes (contents background width height)
+  "Paint CONTENTS, a display list, over BACKGROUND into the current graphics
+context, in a view WIDTH by HEIGHT.  One bad shape is reported and the rest
+are still drawn."
+  (multiple-value-bind (background ops)
+      (canvas-device-ops width height contents background)
     (set-canvas-color background)
     (objc:invoke (objc:invoke (canvas-class "BezierPath") "bezierPathWithRect:"
                               (vector 0d0 0d0 (real-number width) (real-number height)))
@@ -625,6 +637,12 @@ several hundred lines, and one path stroked once is a fifth of the sends."
     (dolist (op ops)
       (handler-case (paint-canvas-op op)
         (error (condition) (note "canvas: ~a" condition)))))
+  (values))
+
+(defun paint-canvas (width height)
+  "Paint the canvas into the current graphics context: what both views'
+-drawRect: do."
+  (paint-shapes (canvas-contents) *canvas-background* width height)
   (incf *canvas-paints*)
   (values))
 

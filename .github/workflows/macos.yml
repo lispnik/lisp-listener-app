@@ -60,7 +60,7 @@ env:
   # master before it is published, so the checkout has to win.  ASDF takes the
   # first match, so ordering is the whole mechanism.
   CL_SOURCE_REGISTRY: >-
-    ${{ github.workspace }}/sbcl-macos/:${{ github.workspace }}/objc/:${{ github.workspace }}/asdf-macos-app/:${{ github.workspace }}/sbcl-macos/ocicl//:
+    ${{ github.workspace }}/lisp-listener-app/:${{ github.workspace }}/objc/:${{ github.workspace }}/asdf-macos-app/:${{ github.workspace }}/lisp-listener-app/ocicl//:
 
 jobs:
   test:
@@ -84,10 +84,10 @@ jobs:
             arch: x86-64
 
     steps:
-      - name: Check out sbcl-macos
+      - name: Check out lisp-listener-app
         uses: actions/checkout@v7
         with:
-          path: sbcl-macos
+          path: lisp-listener-app
 
       - name: Check out objc beside it
         uses: actions/checkout@v7
@@ -162,7 +162,7 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           ocicl setup
-          cd sbcl-macos
+          cd lisp-listener-app
           # ocicl exits 0 when a download fails and ghcr.io fails often enough
           # to matter, so: several attempts, and a failure here rather than a
           # mystery later.
@@ -181,7 +181,7 @@ jobs:
           echo "restored:" && ls ocicl
 
       - name: Report the environment
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: |
           sw_vers
           "$SBCL_SAFEPOINT" --version
@@ -193,7 +193,7 @@ jobs:
       - name: The off-macOS checks, here too
         # Seconds, and they catch a fasl-cache or source-registry problem before
         # anything more expensive has to.
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: make check SBCL="$SBCL_SAFEPOINT"
 
       - name: Run the listener's self-test
@@ -201,7 +201,7 @@ jobs:
         # and asserted on.  macOS ships no timeout(1); perl's alarm is the
         # portable stand-in, and without it a wedged window would burn the
         # whole timeout-minutes instead of failing in two.
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: |
           set -eux
           set -o pipefail
@@ -227,7 +227,7 @@ jobs:
         # Lisp-defined Objective-C class stops surviving: objc re-queues every
         # class and method across SAVE-LISP-AND-DIE and rebuilds them on
         # restart, and this is the step that says whether that happened.
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: |
           set -eux
           "$SBCL_SAFEPOINT" --non-interactive \
@@ -255,7 +255,7 @@ jobs:
         # bundle's symlinks, one per architecture.  Both legs attach to the one
         # release, so creating it may find it already made by the other.
         if: startsWith(github.ref, 'refs/tags/v')
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -289,7 +289,7 @@ jobs:
         run: |
           set -eux
           rm -rf "$RUNNER_TEMP/fresh"
-          git clone --quiet sbcl-macos "$RUNNER_TEMP/fresh"
+          git clone --quiet lisp-listener-app "$RUNNER_TEMP/fresh"
           cd "$RUNNER_TEMP/fresh"
           export PATH="$HOME/.local/bin:$PATH"
           # Retried as the first install is, and for the same reason: ghcr.io
@@ -318,7 +318,7 @@ jobs:
       - name: Drive the debugger pane
         # Both architectures: the pane is all NSRects and NSRanges, which is
         # exactly what returns differently on x86-64 and arm64.
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: |
           set -eux
           set -o pipefail
@@ -349,7 +349,7 @@ jobs:
         # arm64 only: the pictures are for the README, and two of the same thing
         # would be two of the same thing.
         if: matrix.arch == 'arm64'
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: |
           set -eux
           set -o pipefail
@@ -434,7 +434,7 @@ jobs:
         # put minutes on every push for a video nobody asked for.
         # And on a version tag, where it goes on the release beside the app.
         if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && matrix.arch == 'arm64'
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -454,5 +454,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: demo
-          path: sbcl-macos/build/demo/lisp-listener-demo.mp4
+          path: lisp-listener-app/build/demo/lisp-listener-demo.mp4
           if-no-files-found: error

@@ -101,6 +101,17 @@ with NIL and builds a fresh one.")
                                      (objc:invoke (objc:invoke panel "URL") "path")))))
     (error (condition) (note "listenerSaveTranscript: ~a" condition))))
 
+(objc:define-objc-method ("listenerInspect:" :void)
+    ((self listener-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  ;; The last value, and typed at the prompt so that the transcript says what
+  ;; was inspected: * belongs to the listener thread, and so does INSPECT.
+  (handler-case
+      (let ((listener (current-listener)))
+        (when listener
+          (type-into-listener listener "(inspect *)")))
+    (error (condition) (note "listenerInspect: ~a" condition))))
+
 (objc:define-objc-method ("listenerSaveCanvas:" :void)
     ((self listener-controller) (sender objc:objc-object-pointer))
   (declare (ignorable sender))
@@ -486,6 +497,7 @@ like a hang and is not one."
         (ignore-errors (unregister-listener other)))
       (ignore-errors (retarget-main-thread))
       (ignore-errors (hide-canvas))
+      (ignore-errors (hide-inspectors))
       (ignore-errors (queue-set-eof (listener-input listener)))
       (ignore-errors (abort-evaluation listener))
       (ignore-errors

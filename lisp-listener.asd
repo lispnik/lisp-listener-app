@@ -45,6 +45,10 @@
                  (:file "preferences")
                  (:file "files")
                  (:file "canvas")
+                 (:file "places")
+                 (:file "views")
+                 (:file "inspector")
+                 (:file "standard-views")
                  ;; Read into the image when "examples" is compiled; named here
                  ;; so that changing one compiles it again.
                  (:static-file "hello" :pathname "../examples/hello.lisp")
@@ -59,6 +63,7 @@
                  (:static-file "ball" :pathname "../examples/ball.lisp")
                  (:static-file "doodle" :pathname "../examples/doodle.lisp")
                  (:static-file "pong" :pathname "../examples/pong.lisp")
+                 (:static-file "thermal" :pathname "../examples/thermal.lisp")
                  (:file "examples")
                  (:file "repl")))))
 
@@ -75,8 +80,8 @@ an SBCL built --with-sb-safepoint; see the README for why."
   :author "Matthew Kennedy <burnsidemk@gmail.com>"
   :license "MIT"
   :version "0.1.0"
-  :homepage "https://github.com/lispnik/sbcl-macos"
-  :source-control (:git "https://github.com/lispnik/sbcl-macos.git")
+  :homepage "https://github.com/lispnik/lisp-listener-app"
+  :source-control (:git "https://github.com/lispnik/lisp-listener-app.git")
   :depends-on ("lisp-listener/core")
   :components ((:module "src/macos"
                 :pathname "src/macos/"
@@ -88,6 +93,7 @@ an SBCL built --with-sb-safepoint; see the README for why."
                  (:file "history-panel")
                  (:file "canvas-window")
                  (:file "preferences-window")
+                 (:file "inspector-window")
                  (:file "screenshot")
                  (:file "debugger-test")
                  (:file "demo")

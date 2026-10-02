@@ -54,10 +54,12 @@
                           "history" "sexp" "paredit" "keymap" "indent" "transcript"
                           "completion" "paren-highlight" "paredit-view" "history-search"
                           "streams" "config"
-                          "restarts" "preferences" "files" "canvas" "examples" "repl")
+                          "restarts" "preferences" "files" "canvas" "places" "views"
+                          "inspector" "standard-views" "examples" "repl")
                         #+sbcl '("macos/view" "macos/window" "macos/restarts-panel"
                                  "macos/history-panel" "macos/canvas-window"
-                                 "macos/preferences-window" "macos/screenshot"
+                                 "macos/preferences-window" "macos/inspector-window"
+                                 "macos/screenshot"
                                  "macos/app")
                         #+ecl '("ios/view" "ios/restarts-sheet" "ios/history-sheet"
                                 "ios/canvas-sheet" "ios/settings-sheet" "ios/app")))
@@ -1134,13 +1136,13 @@ bound away from the front end's own -- a test has no business writing into
 
 (defcase case-examples "The examples: in the image, listed, and every one runs."
   (install-user-vocabulary)
-  (check (and (= 12 (length *examples*))
+  (check (and (= 13 (length *examples*))
               (every (lambda (entry)
                        (and (plusp (length (example-title entry)))
                             (plusp (length (example-description entry)))
                             (search "(" (example-text entry))))
                      *examples*))
-         "twelve of them, each with a title, a description and its source")
+         "thirteen of them, each with a title, a description and its source")
   (check (string= (example-form :spiral) "(example \"spiral\")")
          "the form that runs one, from its name in any case")
   (say listener "(examples)")
@@ -1158,8 +1160,11 @@ bound away from the front end's own -- a test has no business writing into
              (say listener (format nil "(progn (example ~s) :ran-~a)" name name))
              (check-text listener (format nil ":RAN-~:@(~a~)" name)
                          (format nil "~a runs to its end" name))
-             (check (plusp (length (canvas-contents)))
-                    "and leaves something on the canvas")))
+             ;; All but the last draw on the canvas; that one is inspected.
+             (if (string= name "thermal")
+                 (check-text listener "A plate at" "and is shown by the view it contributed")
+                 (check (plusp (length (canvas-contents)))
+                        "and leaves something on the canvas"))))
       (setf *canvas-time-scale* scale)))
   (check (not (search "[1] CL-USER>" (transcript-so-far listener)))
          "none of them opened the debugger")
@@ -1217,6 +1222,287 @@ bound away from the front end's own -- a test has no business writing into
       (setf *paredit-enabled* paredit *font-size* size)
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+;;; The inspector --------------------------------------------------------------------
+;;;
+;;; With no main thread there is no worker either: what an inspector is asked
+;;; to do it does where it is asked, and its model is there to read.
+
+(defclass test-plate ()
+  ((name :initarg :name :initform "plate")
+   (ambient :initarg :ambient :initform 20)
+   (unset)))
+
+(defstruct test-point x y)
+
+(defun pane-rows (inspector pane)
+  "The computed rows of PANE's table, as lists of cells."
+  (let ((table (pane-model-table (nth pane (model-panes (inspector-model inspector))))))
+    (loop for index below (table-model-count table)
+          for row = (table-row table index)
+          while row
+          collect (row-cells row))))
+
+(defun pane-row-index (inspector pane label)
+  (position label (pane-rows inspector pane) :key #'first :test #'equal))
+
+(defun byte-vector (&rest bytes)
+  (make-array (length bytes) :element-type '(unsigned-byte 8) :initial-contents bytes))
+
+(defcase case-places "Places: where a value is, and whether it may be changed."
+  (let* ((plate (make-instance 'test-plate))
+         (slot (inspector:slot-place plate 'ambient))
+         (unset (inspector:slot-place plate 'unset)))
+    (check (eql 20 (inspector:place-value slot)) "a slot's place reads the slot")
+    (setf (inspector:place-value slot) 25)
+    (check (eql 25 (slot-value plate 'ambient)) "and writes it")
+    (check (and (inspector:place-bound-p slot) (not (inspector:place-bound-p unset)))
+           "an unbound slot's place says it has no value")
+    (place-remove slot)
+    (check (not (slot-boundp plate 'ambient)) "and a slot can be unbound through its place"))
+  (let ((point (make-test-point :x 1 :y 2)))
+    (setf (inspector:place-value (inspector:slot-place point 'x)) 10)
+    (check (= 10 (test-point-x point)) "a structure's slot is a place too"))
+  (let* ((bytes (byte-vector 1 2 3))
+         (place (inspector:element-place bytes 1)))
+    (check (and (inspector:place-accepts-p place 255)
+                (not (inspector:place-accepts-p place 256))
+                (not (inspector:place-accepts-p place "two")))
+           "an element of a byte vector accepts a byte and nothing else")
+    (setf (inspector:place-value place) 200)
+    (check (= 200 (aref bytes 1)) "and takes one"))
+  (let* ((table (make-hash-table :test 'equal))
+         (place (inspector:hash-place table "k")))
+    (check (not (inspector:place-bound-p place)) "a key not in a table has no value yet")
+    (setf (inspector:place-value place) 1)
+    (check (and (inspector:place-bound-p place) (= 1 (gethash "k" table)))
+           "setting it puts it in")
+    (place-remove place)
+    (check (zerop (hash-table-count table)) "and removing it takes it out"))
+  (let* ((matrix (make-array '(2 3) :initial-element 0))
+         (place (inspector:aref-place matrix 1 2)))
+    (setf (inspector:place-value place) 7)
+    (check (= 7 (aref matrix 1 2)) "an array's element, by its subscripts"))
+  (let ((fixed (inspector:value 42))
+        (cell (list 0)))
+    (check (and (= 42 (inspector:place-value fixed))
+                (not (inspector:place-supports-p fixed :set)))
+           "a value on its own can be read and not changed")
+    (let ((place (inspector:place :get (lambda () (car cell))
+                                  :set (lambda (v) (setf (car cell) v))
+                                  :accepts #'evenp)))
+      (check (and (inspector:place-supports-p place :set)
+                  (inspector:place-accepts-p place 2)
+                  (not (inspector:place-accepts-p place 3)))
+             "a place made of functions says what it will take"))))
+
+(defcase case-views "Views: who applies to what, and in what order."
+  (check (equal (inspector:views (byte-vector 1 2 3))
+                '("Histogram" "Hex" "Plot" "Elements" "Object" "Describe"))
+         "a byte vector: its pictures first, the more specific before the less")
+  (check (equal (inspector:views (list 1 2 3)) '("Elements" "Object" "Describe"))
+         "a list: Elements before Object, being the more specific")
+  (check (equal (inspector:views (cons 1 2)) '("Cons" "Object" "Describe"))
+         "a dotted pair is not a list of elements")
+  (check (equal (subseq (inspector:views (make-array '(3 3) :element-type 'single-float
+                                                            :initial-element 0.0))
+                        0 3)
+                '("Heat map" "Surface" "Grid"))
+         "a 2D array of floats: a heat map and a surface, then the grid")
+  (check (not (member "Heat map" (inspector:views (make-array '(2 2) :initial-element :a))
+                      :test #'string=))
+         "a 2D array of symbols has a grid and no heat map")
+  (check (equal (first (inspector:views (make-instance 'test-plate))) "Object")
+         "an instance opens on its slots")
+  (check (equal (inspector:views 42) '("Integer" "Object" "Describe"))
+         "a number has a view of its own")
+  ;; Contributed, here, as any system would.
+  (inspector:define-view (test-hot-view :title "Hot" :type test-plate :priority 20
+                                        :when (lambda (plate) (> (slot-value plate 'ambient) 50))
+                                        :options ((scale 2 :integer :min 1 :max 9)))
+      (plate &key scale)
+    (inspector:text "hot: ~d" (* scale (slot-value plate 'ambient))))
+  (let ((cool (make-instance 'test-plate :ambient 20))
+        (hot (make-instance 'test-plate :ambient 80)))
+    (check (not (member "Hot" (inspector:views cool) :test #'string=))
+           "a contributed view does not apply where its predicate says no")
+    (check (equal (first (inspector:views hot)) "Hot")
+           "and where it does, its priority puts it first")
+    (check (search "hot: 160" (with-output-to-string (*standard-output*)
+                                (inspector:show hot "Hot")))
+           "it is given its option's default")
+    (check (search "hot: 400" (with-output-to-string (*standard-output*)
+                                (inspector:show hot "Hot" :scale 5)))
+           "or the value asked for")
+    (check (search "hot: 720" (with-output-to-string (*standard-output*)
+                                (inspector:show hot "Hot" :scale 50)))
+           "kept within the option's range"))
+  (let ((count (length *views*)))
+    (inspector:define-view (test-hot-view :title "Hot" :type test-plate) (plate)
+      (inspector:text "again ~a" plate))
+    (check (= count (length *views*)) "defining a view again replaces it"))
+  (inspector:define-view (test-broken-view :title "Broken" :type test-point) (point)
+    (error "no good: ~a" (test-point-x point)))
+  (check (search "could not show this"
+                 (with-output-to-string (*standard-output*)
+                   (inspector:show (make-test-point :x 1) "Broken")))
+         "a view that signals is a scene that says so, not an error")
+  (setf *views* (remove-if (lambda (view)
+                             (member (view-name view) '(test-hot-view test-broken-view)))
+                           *views*)))
+
+(defcase case-scenes "Scenes: the standard views, as the text of what they show."
+  (flet ((shown (object &optional view &rest options)
+           (with-output-to-string (*standard-output*)
+             (apply #'inspector:show object view options))))
+    (check (search "000000  00 01 02 03" (remove #\0 (shown (byte-vector 0 1 2 3) "Hex")
+                                                 :count 2))
+           "Hex: an offset and the bytes")
+    (check (search "ABC." (shown (byte-vector 65 66 67 0) "Hex")) "and the characters they are")
+    (check (search "4 bytes in 32 bins" (shown (byte-vector 1 1 2 200) "Histogram"))
+           "Histogram: its text is what a drawing falls back to")
+    (check (search "[2]" (shown (list :a :b :c) "Elements")) "Elements: a row an element")
+    (check (search "… and" (shown (make-list 100 :initial-element 0) "Elements"))
+           "a long one is cut short, and says how much more there is")
+    (let ((table (make-hash-table)))
+      (setf (gethash :k table) :v)
+      (check (and (search ":K" (shown table "Entries")) (search ":V" (shown table "Entries")))
+             "Entries: a hash table's keys and values"))
+    (check (and (search "ambient" (shown (make-instance 'test-plate)))
+                (search "#<unbound>" (shown (make-instance 'test-plate))))
+           "Object: an instance's slots, an unbound one said to be")
+    (check (search "#xFF" (shown 255 "Integer")) "Integer: in hexadecimal")
+    (check (search "name" (shown 'car "Symbol")) "Symbol: its name")
+    (check (search "exports" (shown (find-package "CANVAS") "Package")) "Package: what it exports")
+    (check (search "lambda list" (shown #'car "Function")) "Function: its lambda list")
+    (check (plusp (length (shown 42 "Describe"))) "Describe: whatever DESCRIBE says"))
+  ;; A drawing is the canvas's shapes, and none of them reach the canvas.
+  (canvas:clear)
+  (canvas:color :red)
+  (let* ((scene (view-scene (find-view 'histogram-view) (byte-vector 0 0 255) '(:bins 8)))
+         (boxes (count :rect (drawing-scene-ops scene) :key #'first)))
+    (check (drawing-scene-p scene) "the histogram answers a drawing")
+    (check (= 8 boxes) "with a box for each of its eight bins")
+    (check (and (null (canvas-contents)) (equal *canvas-color* (canvas-color :red)))
+           "and the real canvas, and its pen, are as they were")
+    (check (plusp (length (nth-value 1 (canvas-device-ops 300 200 (drawing-scene-ops scene)
+                                                         (drawing-scene-background scene)))))
+           "the canvas's painter takes a drawing's shapes as it takes its own"))
+  (let ((surface (view-scene (find-view 'surface-view)
+                             (make-array '(4 4) :element-type 'single-float
+                                                :initial-element 1.0)
+                             '())))
+    (check (= 24 (count :line (drawing-scene-ops surface) :key #'first))
+           "a 4 by 4 surface is the 24 edges of its grid"))
+  (canvas:color :white))
+
+(defcase case-inspector "An inspector: its model, walking in, editing, options, controls."
+  (let* ((plate (make-instance 'test-plate :ambient 20))
+         (inspector (make-inspector plate)))
+    (inspector-refresh inspector)
+    (let ((model (inspector-model inspector)))
+      (check (and model (= 2 (length (model-panes model)))) "an inspector has two panes")
+      (check (equal (mapcar #'pane-model-view-title (model-panes model)) '("Object" "Describe"))
+             "showing the best two views that apply")
+      (check (search "TEST-PLATE" (cdr (assoc "Class" (model-about model) :test #'string=)))
+             "and says what it is looking at"))
+    ;; Walk into a slot, and back.
+    (let ((name (pane-row-index inspector 0 "name")))
+      (inspector-open-row inspector 0 name)
+      (check (and (equal "plate" (inspector-object inspector))
+                  (equal (rest (model-path (inspector-model inspector))) '("name")))
+             "opening a row walks into its value, and the path says how it got there")
+      (inspector-go-to inspector 0)
+      (check (eq plate (inspector-object inspector)) "and the path leads back"))
+    ;; Edit a slot.
+    (let ((ambient (pane-row-index inspector 0 "ambient")))
+      (inspector-edit-row inspector 0 ambient "(+ 40 2)")
+      (check (eql 42 (slot-value plate 'ambient)) "a row is edited with a form, evaluated")
+      (check (member "42" (nth ambient (pane-rows inspector 0)) :test #'string=)
+             "and the model shows the new value")
+      (inspector-edit-row inspector 0 ambient "(car 7)")
+      (check (and (eql 42 (slot-value plate 'ambient))
+                  (model-message (inspector-model inspector)))
+             "a form that signals changes nothing, and its report is the message"))
+    ;; A view chosen stays chosen.
+    (inspector-select-view inspector 1 'object-view)
+    (check (equal (mapcar #'pane-model-view-title (model-panes (inspector-model inspector)))
+                  '("Object" "Object"))
+           "a pane shows the view chosen for it"))
+  ;; A byte vector: refused values, and an option.
+  (let* ((bytes (byte-vector 1 2 3))
+         (inspector (make-inspector bytes)))
+    (inspector-refresh inspector)
+    (check (equal (mapcar #'pane-model-view-title (model-panes (inspector-model inspector)))
+                  '("Histogram" "Hex"))
+           "a byte vector opens as a histogram beside its hex")
+    (flet ((boxes ()
+             (count :rect (drawing-scene-ops
+                           (pane-model-drawing (first (model-panes (inspector-model inspector)))))
+                    :key #'first)))
+      (check (= 32 (boxes)) "the histogram has its default 32 bins")
+      (inspector-set-option inspector 0 :bins 16)
+      (check (= 16 (boxes)) "and 16 when its option says 16"))
+    (inspector-select-view inspector 1 'elements-view)
+    (inspector-edit-row inspector 1 0 "999")
+    (check (and (= 1 (aref bytes 0)) (model-message (inspector-model inspector)))
+           "a byte vector's element refuses 999, and says so")
+    (inspector-edit-row inspector 1 0 "99")
+    (check (= 99 (aref bytes 0)) "and takes 99"))
+  ;; A table too long to compute is computed as it is looked at.
+  (let* ((big (make-array 100000 :initial-element 0))
+         (inspector (make-inspector big)))
+    (inspector-refresh inspector)
+    (let ((table (pane-model-table
+                  (find "Elements" (model-panes (inspector-model inspector))
+                        :key #'pane-model-view-title :test #'string=))))
+      (check (= 100000 (table-model-count table)) "a table of 100,000 rows")
+      (check (= *inspector-row-chunk* (hash-table-count (table-model-rows table)))
+             "has its first few computed")
+      (inspector-need-rows inspector
+                           (position "Elements" (model-panes (inspector-model inspector))
+                                     :key #'pane-model-view-title :test #'string=)
+                           5000)
+      (check (and (table-row table 5000) (not (table-row table 50000)))
+             "and more when they are asked for")))
+  ;; Controls, and telling the other inspectors.
+  (inspector:define-controls (test-plate-controls :title "Plate" :type test-plate) (plate)
+    (list (inspector:slider "Ambient" (inspector:slot-place plate 'ambient) :min 0 :max 100)
+          (inspector:button "Reset" (lambda () (setf (slot-value plate 'ambient) 0)))))
+  (let* ((plate (make-instance 'test-plate :ambient 20))
+         (one (make-inspector plate))
+         (two (make-inspector plate)))
+    (push one *inspectors*)
+    (push two *inspectors*)
+    (unwind-protect
+         (progn
+           (inspector-refresh one)
+           (inspector-refresh two)
+           (let ((controls (model-controls (inspector-model one))))
+             (check (equal (mapcar #'control-model-label controls) '("Ambient" "Reset"))
+                    "an object's contributed controls are in its model")
+             (check (eql 20 (control-model-value (first controls)))
+                    "a slider shows its place's value"))
+           (inspector-set-control one 0 55.5d0)
+           (check (eql 55.5d0 (slot-value plate 'ambient)) "moving the slider sets the place")
+           (check (eql 55.5d0 (control-model-value
+                               (first (model-controls (inspector-model two)))))
+                  "and another inspector on the same object sees it")
+           (inspector-set-control one 1)
+           (check (eql 0 (slot-value plate 'ambient)) "a button calls its function")
+           (setf (slot-value plate 'ambient) 7)
+           (inspector:note-changed plate)
+           (check (eql 7 (control-model-value
+                          (first (model-controls (inspector-model two)))))
+                  "NOTE-CHANGED makes every inspector on an object look again"))
+      (setf *inspectors* (set-difference *inspectors* (list one two))
+            *contributors* (remove 'test-plate-controls *contributors*
+                                   :key #'contributor-name))))
+  ;; INSPECT, at the prompt, where there is no window: it prints.
+  (say listener "(inspect (list :alpha :beta))")
+  (check-text listener "[1]" "(inspect x) at the prompt shows the object")
+  (check-text listener ":BETA" "in its best view")
+  (check-text listener "Other views: Object, Describe." "and says what other views there are"))
+
 ;;; ----------------------------------------------------------------------------
 
 (dolist (case '(case-session case-debugger case-use-value case-restart-with-value
@@ -1230,7 +1516,8 @@ bound away from the front end's own -- a test has no business writing into
                 case-sexp case-paredit case-indent case-keymap case-init-file
                 case-history-search
                 case-prompt-is-recorded
-                case-canvas case-examples case-preferences))
+                case-canvas case-examples case-preferences
+                case-places case-views case-scenes case-inspector))
   (funcall case))
 
 (format t "~&~%headless-test: ~d check~:p, ~d failure~:p~%" *checks* *failures*)

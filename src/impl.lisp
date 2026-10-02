@@ -141,6 +141,48 @@ which wants to know whether there is an &BODY in it."
    #+sbcl (sb-kernel:%fun-lambda-list (macro-function symbol))
    #+ecl (ext:function-lambda-list symbol)))
 
+(defun class-slot-names (class)
+  "The names of CLASS's slots, in order; NIL when it has none or will not say.
+Standard classes and structure classes alike, on both."
+  (ignore-errors
+   #+sbcl (progn (unless (sb-mop:class-finalized-p class) (sb-mop:finalize-inheritance class))
+                 (mapcar #'sb-mop:slot-definition-name (sb-mop:class-slots class)))
+   #+ecl (progn (unless (clos:class-finalized-p class) (clos:finalize-inheritance class))
+                (mapcar #'clos:slot-definition-name (clos:class-slots class)))))
+
+(defun class-direct-subclass-names (class)
+  (ignore-errors
+   (mapcar #'class-name
+           #+sbcl (sb-mop:class-direct-subclasses class)
+           #+ecl (clos:class-direct-subclasses class))))
+
+(defun class-precedence-names (class)
+  (ignore-errors
+   #+sbcl (progn (unless (sb-mop:class-finalized-p class) (sb-mop:finalize-inheritance class))
+                 (mapcar #'class-name (sb-mop:class-precedence-list class)))
+   #+ecl (progn (unless (clos:class-finalized-p class) (clos:finalize-inheritance class))
+                (mapcar #'class-name (clos:class-precedence-list class)))))
+
+(defun function-arglist (function)
+  "FUNCTION's lambda list and whether it is known, as two values."
+  (handler-case
+      #+sbcl (values (sb-kernel:%fun-lambda-list function) t)
+      #+ecl (ext:function-lambda-list function)
+    (error () (values nil nil))))
+
+(defmacro with-inspect-hook ((function) &body body)
+  "Run BODY with CL:INSPECT calling FUNCTION, of the object, instead of the
+implementation's own inspector -- which converses on a terminal this program
+has not got.  SBCL's hook is internal and takes the streams as well; ECL's is
+exported and takes the object alone."
+  #+sbcl `(let ((sb-impl::*inspect-fun*
+                  (lambda (object input output)
+                    (declare (ignore input output))
+                    (funcall ,function object))))
+            ,@body)
+  #+ecl `(let ((ext:*inspector-hook* ,function))
+           ,@body))
+
 (defun exit-process (code)
   "Leave now, without unwinding: the caller has nothing left to clean up and a
 thread still blocked in READ would otherwise hold the process open."
@@ -200,6 +242,10 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 ;; ...write it to a PNG file; and the directory a file with no
                 ;; directory of its own is saved in.
                 save-canvas-png documents-directory
+                ;; The inspector (src/inspector.lisp): what kinds of scene this
+                ;; front end can put on screen -- none means INSPECT prints --
+                ;; put an inspector's window up; and show its new model.
+                inspector-capabilities show-inspector refresh-inspector
                 ;; LISTENER-TEXT-VIEW's slot accessors.  The class is the front
                 ;; end's -- its superclass is NSTextView or UITextView -- and
                 ;; the transcript in the core reads and writes its slots.
@@ -212,4 +258,4 @@ ECL never signals a thread to collect garbage, so the question does not arise."
 ;;; system tolerates a forward reference; the compile check, which compiles each
 ;;; file on its own, reports one as a style warning without these.
 (declaim (ftype function refresh-paren-highlight clear-paren-highlight
-                utf-16-length))
+                utf-16-length inspect-object))

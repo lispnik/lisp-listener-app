@@ -139,6 +139,16 @@ none.  Asked of NSURL, which is how a file arrives from the Finder."
   (define-line-start "moveToBeginningOfLineAndModifySelection:" t)
   (define-line-start "moveToLeftEndOfLineAndModifySelection:" t))
 
+;;; A value printed at the prompt is a link to itself (TRANSCRIPT-INSERT), and
+;;; a click on one opens the inspector on it.  Answering true says the click
+;;; has been dealt with; a link that is not ours is left to AppKit.
+(define-listener-method ("textView:clickedOnLink:atIndex:" objc:objc-bool)
+    ((text-view objc:objc-object-pointer)
+     (link objc:objc-object-pointer)
+     (index (:unsigned :long-long)))
+  (inspect-shown-value *listener*
+                       (objc:ns-string-to-string (objc:invoke link "description"))))
+
 (define-listener-method ("moveUp:" :void)
     ((sender objc:objc-object-pointer))
   (unless (and (caret-on-first-input-line-p self pointer)

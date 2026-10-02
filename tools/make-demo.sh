@@ -32,7 +32,7 @@ magick -size "${w}x${h}" xc:'#1e1e1e' -gravity center \
   -font "$bold" -pointsize $(pt 64) -fill white -annotate +0-$(pt 120) 'Lisp Listener' \
   -font "$regular" -pointsize $(pt 36) -fill '#9a9a9a' -annotate +0-$(pt 20) 'Option-Return · paredit · ⌘R history · ⌘. interrupt' \
   -annotate +0+$(pt 40) 'a debugger docked under the transcript: frames, locals, ⌘-number restarts' \
-  -pointsize $(pt 30) -fill '#6f6f6f' -annotate +0+$(pt 130) 'github.com/lispnik/sbcl-macos' end.png
+  -pointsize $(pt 30) -fill '#6f6f6f' -annotate +0+$(pt 130) 'github.com/lispnik/lisp-listener-app' end.png
 
 python3 - "$dir" "$w_even" "$h_even" <<'EOF'
 import sys

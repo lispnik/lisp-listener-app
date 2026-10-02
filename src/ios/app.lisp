@@ -69,6 +69,13 @@ target the listener thread hops to, and only then the thread."
   "The one listener there is."
   (or *listener* (first *listeners*)))
 
+;;; The inspector has no window here yet, and says so by having no
+;;; capabilities: (inspect x) then prints what a window would have shown.  See
+;;; src/inspector.lisp.
+(defun inspector-capabilities () '())
+(defun show-inspector (inspector) (declare (ignore inspector)) nil)
+(defun refresh-inspector (inspector) (declare (ignore inspector)) nil)
+
 ;;; A file from Files -----------------------------------------------------------
 ;;;
 ;;; The bundle declares .lisp as a document type (lisp-listener-ios.asd), so
@@ -711,6 +718,16 @@ A step whose predicate has not held within its time fails."
              (unless *paredit-enabled* (error "paredit is still off"))
              (hide-settings-sheet))))
    (list "Settings is put away" (lambda () (not (settings-sheet-up-p))) nil)
+   ;; The inspector has no window here yet, so INSPECT prints what one would
+   ;; show: the best view of the thing, and the names of the others.
+   (list "(inspect x) prints, where there is no inspector window yet"
+         (lambda () (at-top-level-prompt-p listener))
+         (lambda () (type-line listener "(inspect (list :alpha :beta))")))
+   (list "the object in its best view, and the other views by name"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (search "Other views: Object, Describe." (self-test-text listener))
+                         (search ":BETA" (self-test-text listener))))
+         nil)
    ;; An example put at the prompt to change, rather than run.
    (list "an example is asked for, to edit" (lambda () (at-top-level-prompt-p listener))
          (lambda () (type-line listener "(example-edit \"hello\")")))

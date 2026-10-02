@@ -54,7 +54,7 @@ takes no part in them.
 
 If this ever changes it will change here first, in the repository's history.
 Questions: open an issue at
-<https://github.com/lispnik/sbcl-macos/issues>, or write to
+<https://github.com/lispnik/lisp-listener-app/issues>, or write to
 burnsidemk@gmail.com.
 
 *2 October 2026*

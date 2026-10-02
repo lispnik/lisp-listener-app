@@ -28,8 +28,10 @@ anywhere and no account is needed.
 - Stop interrupts a form that is still running.
 - There is a canvas to draw on: (circle 0 0 50). On an iPad it sits beside
   the transcript; on a phone it is a sheet. It takes a finger, too.
-- Try lists twelve short examples -- a spiral, a fractal tree, the Mandelbrot
+- Try lists thirteen short examples -- a spiral, a fractal tree, the Mandelbrot
   set, Conway's Life, Snake, Pong -- each a screen of Lisp to read and change.
+- (inspect x) shows a value the way that suits it -- a byte vector as hex, a
+  table's entries, an object's slots -- and names the other views there are.
 - Open loads a .lisp file from the Files app, and Files can open one in Lisp
   Listener.
 - A bar above the keyboard has the keys a phone lacks: Tab, Esc, the arrows,
@@ -61,9 +63,11 @@ The things most worth trying:
 9. On an iPad, the canvas should sit beside the transcript and leave you the
    keyboard. With a hardware keyboard: Option-Return starts a new indented
    line, Cmd-. stops, Cmd-K clears, Cmd-+ and Cmd-- change the size of the type.
-10. Tap the gear at the end of the key bar: the switches should take effect at
+10. Type (inspect (list 1 2 3)), then (inspector:show 255 "Integer"): each
+    should print the value laid out, and (inspect x) the other views it has.
+11. Tap the gear at the end of the key bar: the switches should take effect at
     once, and the stepper should resize everything in the transcript.
-11. Rotate the device. On an iPad with the canvas up, narrow the window: the
+12. Rotate the device. On an iPad with the canvas up, narrow the window: the
     canvas should become a sheet, and dock again when there is room.
 
 Please report anything that hangs, any key that does nothing, and any place
@@ -131,9 +135,13 @@ A CANVAS TO DRAW ON
 • (frame ...) and (wait ...) animate. (key) reads the arrows under the canvas and (pointer) reads your finger, so a game is a page of code.
 • (save "mine.png") keeps the picture, in the app's folder in Files.
 
-TWELVE EXAMPLES TO TAKE APART
-• A rainbow spiral, a rose curve, a fractal tree, Sierpinski's triangle, the Mandelbrot set, a clock, bouncing balls, Conway's Life, a doodle, Snake and Pong.
+THIRTEEN EXAMPLES TO TAKE APART
+• A rainbow spiral, a rose curve, a fractal tree, Sierpinski's triangle, the Mandelbrot set, a clock, bouncing balls, Conway's Life, a doodle, Snake, Pong and a simulated hot plate.
 • Each is a screen of Lisp. Run one, read it, or put it at the prompt and change it.
+
+AN INSPECTOR
+• (inspect x) lays a value out in the view that suits it: an object's slots, a table's entries, a byte vector as hex, an integer in every base.
+• Several views apply to most things, and you can add your own for your own data.
 
 YOUR FILES AND YOUR HISTORY
 • Open a .lisp file from the Files app or a share sheet and it is loaded. The app's folder is in Files, so your own code is a tap away.
@@ -153,9 +161,9 @@ Lisp Listener is free and open source. The same listener runs on the Mac, with S
 lisp,common lisp,repl,ecl,programming,code,interpreter,debugger,turtle,graphics,learn,coding,sbcl
 ```
 
-**Support URL:** https://github.com/lispnik/sbcl-macos/issues
+**Support URL:** https://github.com/lispnik/lisp-listener-app/issues
 
-**Marketing URL:** https://github.com/lispnik/sbcl-macos
+**Marketing URL:** https://github.com/lispnik/lisp-listener-app
 
 **Copyright:** 2026 Matthew Kennedy
 
@@ -164,7 +172,7 @@ lisp,common lisp,repl,ecl,programming,code,interpreter,debugger,turtle,graphics,
 **Data Not Collected.** The app has no network code; nothing typed into it
 leaves the device.
 
-**Privacy Policy URL:** https://github.com/lispnik/sbcl-macos/blob/main/PRIVACY.md
+**Privacy Policy URL:** https://github.com/lispnik/lisp-listener-app/blob/main/PRIVACY.md
 
 Required for the App Store and for external TestFlight testers, not for
 internal ones. The page is `PRIVACY.md` at the top of the repository.
@@ -181,6 +189,8 @@ Already answered in the bundle: `ITSAppUsesNonExemptEncryption` is false.
 | 0.1.52 | the canvas and six examples |
 | 0.1.53 | files from the Files app; the iPad crash on Cancel fixed |
 | 0.1.54 | a closed canvas stays closed |
-| next | touch on the canvas, the docked canvas on iPad, Open, saving a picture, twelve examples, Settings and the size of the type |
+| 0.1.56 | touch on the canvas, the docked canvas on iPad, Open, saving a picture, twelve examples, Settings and the size of the type |
+| 0.1.58 | C-a goes to the start of the line, after the prompt |
+| next | (inspect x), printed as text; a thirteenth example |
 
 Everything above describes the next build. Do not paste it over an older one.

@@ -63,6 +63,12 @@
     ;; listener's lower right corner, and is composited in where it sits.
     (when (canvas-visible-p)
       (demo-overlay path *canvas-window* window))
+    ;; An inspector is another, laid over the listener for the demo.
+    (dolist (inspector (reverse *inspectors*))
+      (let ((inspector-window (inspector-part inspector :window)))
+        (when (and (live-pointer-p inspector-window)
+                   (objc:invoke-bool inspector-window "isVisible"))
+          (demo-overlay path inspector-window window))))
     ;; And so is Settings, which the demo likewise puts over the listener.
     (when (and (live-pointer-p *preferences-window*)
                (objc:invoke-bool *preferences-window* "isVisible"))
@@ -216,6 +222,66 @@ how AppKit would deliver them -- and a frame of video for each."
   (pump-for 0.3d0)
   (demo-frame 2.4d0))
 
+(defun demo-await-inspector (listener what)
+  "Wait for the one inspector the demo has open, and lay its window over the
+listener's so that it is in the picture."
+  (demo-expect (wait-for (lambda () (newest-inspector-ready-p 1)) :timeout 20) what)
+  (let* ((inspector (first *inspectors*))
+         (frame (objc:invoke (listener-window listener) "frame")))
+    (objc:invoke (inspector-part inspector :window) "setFrame:display:"
+                 (vector (+ (aref frame 0) 16d0) (+ (aref frame 1) 16d0)
+                         (- (aref frame 2) 32d0) (- (aref frame 3) 76d0))
+                 t)
+    (refresh-inspector inspector)
+    (pump-for 0.4d0)
+    inspector))
+
+(defun demo-inspector (listener)
+  "The inspector: two views of a byte vector, an option, and the thermal
+example's contributed view and controls."
+  (demo-caption "(inspect x) opens an inspector: two views of one thing, side by side")
+  (demo-type "(defparameter *bytes* (coerce (loop for i below 256 collect (mod (* i i) 251)) '(vector (unsigned-byte 8))))"
+             :per-key 0.03d0)
+  (demo-return "*BYTES*" :hold 0.6d0)
+  (demo-type "(inspect *bytes*)")
+  (objc:invoke (demo-view) "insertNewline:" (cffi:null-pointer))
+  (let ((inspector (demo-await-inspector listener "an inspector on the bytes")))
+    (demo-frame 3.2d0)
+    (demo-caption "A view's options are its own: here, how many bins")
+    (let ((slider (first (getf (inspector-pane-parts inspector 0) :option-controls))))
+      (dolist (bins '(26 20 14 8 12 16))
+        (objc:invoke slider "setDoubleValue:" (float bins 1d0))
+        (send-control-action slider)
+        (demo-expect (wait-for (lambda () (eql bins (inspector-drawing-count inspector 0 :rect)))
+                               :timeout 10)
+                     (format nil "a histogram of ~d bins" bins))
+        (pump 0.1d0)
+        (demo-frame 0.45d0)))
+    (demo-frame 1.6d0))
+  (hide-inspectors)
+  (pump-for 0.3d0)
+  (demo-caption "Anyone can contribute a view, and controls: this hot plate is forty lines")
+  (run-example-in-listener listener "thermal")
+  (let* ((inspector (demo-await-inspector listener "an inspector on the plate"))
+         (slider (second (inspector-part inspector :control-views))))
+    (demo-at-prompt)
+    (demo-frame 2.8d0)
+    (demo-caption "A slider changes the object, and every view of it is drawn again")
+    (dolist (source '(75 60 45 30 15 35 60 85))
+      (objc:invoke slider "setDoubleValue:" (float source 1d0))
+      (send-control-action slider)
+      (demo-expect (wait-for (lambda ()
+                               (eql (float source 1d0)
+                                    (control-model-value
+                                     (second (model-controls (inspector-model inspector))))))
+                             :timeout 10)
+                   (format nil "the plate's source at ~d" source))
+      (pump 0.15d0)
+      (demo-frame 0.5d0))
+    (demo-frame 1.8d0))
+  (hide-inspectors)
+  (pump-for 0.3d0))
+
 (defun demo-settings (listener)
   "Settings, and the size of the type from the View menu."
   (let ((frame (objc:invoke (listener-window listener) "frame")))
@@ -251,7 +317,7 @@ how AppKit would deliver them -- and a frame of video for each."
   (objc:invoke (demo-view) "insertNewline:" (cffi:null-pointer))
   (demo-drawn 141 "the spiral")
   (demo-frame 2.8d0)
-  (demo-caption "Twelve short examples come with it, in the Examples menu")
+  (demo-caption "Short examples come with it, in the Examples menu")
   (run-example-in-listener listener "tree")
   (demo-drawn 511 "the tree")
   (demo-frame 2.4d0)
@@ -396,6 +462,8 @@ the captions."
     (demo-press "0") (demo-at-prompt) (pump-for 0.3d0) (demo-frame 1.8d0)
 
     (demo-canvas listener)
+
+    (demo-inspector listener)
 
     (demo-caption "Settings… has the switches, and ⌘+ and ⌘- change the size of the type")
     (demo-settings listener)

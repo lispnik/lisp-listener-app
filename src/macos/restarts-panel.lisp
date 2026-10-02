@@ -366,6 +366,10 @@ function that connects the outline to TARGET once TARGET knows the items."
               ;; for them at once.
               (objc:invoke outline "setDataSource:" target)
               (objc:invoke outline "setDelegate:" target)
+              ;; A double click on a local opens the inspector on it.
+              (objc:invoke outline "setTarget:" target)
+              (objc:invoke outline "setDoubleAction:"
+                           (objc:coerce-to-selector "restartsInspectLocal:"))
               (objc:invoke outline "reloadData")))))
 
 ;;; The outline's items.  NSOutlineView keeps track of a row by the IDENTITY of
@@ -415,6 +419,26 @@ function that connects the outline to TARGET once TARGET knows the items."
 
 (defun controller-backtrace-items (controller)
   (getf (controller-views controller) :backtrace-items))
+
+(defun inspect-backtrace-item (controller item)
+  "Open the inspector on the local ITEM stands for.  True if it was a local,
+and its value was kept -- which it is on SBCL, where there are locals at all."
+  (let* ((items (controller-backtrace-items controller))
+         (place (and items (item-place items item))))
+    (when (and place (cdr place))
+      (let* ((frame (nth (car place) (backtrace-items-frames items)))
+             (values (backtrace-frame-local-values frame)))
+        (when (< (cdr place) (length values))
+          (inspect-object (nth (cdr place) values) (controller-listener controller))
+          t)))))
+
+(objc:define-objc-method ("restartsInspectLocal:" :void)
+    ((self restarts-controller) (sender objc:objc-object-pointer))
+  (handler-case
+      (let ((row (objc:invoke sender "clickedRow")))
+        (when (>= row 0)
+          (inspect-backtrace-item self (objc:invoke sender "itemAtRow:" row))))
+    (error (condition) (note "restartsInspectLocal: ~a" condition))))
 
 (objc:define-objc-method ("outlineView:numberOfChildrenOfItem:" (:signed :long-long))
     ((self restarts-controller) (outline objc:objc-object-pointer)

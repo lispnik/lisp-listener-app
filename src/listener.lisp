@@ -56,6 +56,10 @@ time to put the event loop away' are the same question.")
   ;; The history list, while one is up.  Thread 1 only.
   history-panel
   history-table
+  ;; The values printed at the prompt, by number, so that one clicked in the
+  ;; transcript can be inspected: see REMEMBER-SHOWN-VALUE.
+  (shown-values (make-hash-table))
+  (shown-count 0)
   ;; Set from MAIN when the application is a bundle, so that quitting can go
   ;; through -[NSApplication terminate:] rather than SB-EXT:EXIT.
   (bundled nil))
@@ -94,6 +98,33 @@ other one and the first in the list would answer for all of them."
 Compared with EQL, which works where pointer comparison does not: the bridge
 hands an IMP the same Lisp object every time."
   (and object (find object *listeners* :key #'listener-view-object)))
+
+(defparameter *shown-values-kept* 500
+  "How many of the values a listener has printed it keeps hold of, so that a
+click on one in the transcript can open it.  Kept means not collected: a
+transcript full of big values would otherwise be a memory leak with a
+scrollbar.  Clearing the transcript lets them all go.")
+
+(defvar *shown-values-lock* (bt:make-lock "lisp-listener shown values"))
+
+(defun remember-shown-value (listener value)
+  "Keep VALUE, which is about to be printed, and answer the number to find it
+by.  The listener thread's."
+  (bt:with-lock-held (*shown-values-lock*)
+    (let ((id (incf (listener-shown-count listener)))
+          (values (listener-shown-values listener)))
+      (setf (gethash id values) value)
+      (remhash (- id *shown-values-kept*) values)
+      id)))
+
+(defun shown-value (listener id)
+  "The value printed as number ID, and whether it is still kept."
+  (bt:with-lock-held (*shown-values-lock*)
+    (gethash id (listener-shown-values listener))))
+
+(defun forget-shown-values (listener)
+  (bt:with-lock-held (*shown-values-lock*)
+    (clrhash (listener-shown-values listener))))
 
 (defun warm-selectors (listener)
   "Send, from thread 1, every selector the listener thread will later send.

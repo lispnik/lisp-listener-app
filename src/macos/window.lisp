@@ -7,7 +7,8 @@
 (defparameter +default-frame+ #(0d0 0d0 760d0 520d0))
 
 ;;; Defined in files that load after this one.
-(declaim (ftype function new-listener hide-preferences-window remember-canvas-window))
+(declaim (ftype function new-listener hide-preferences-window remember-canvas-window
+                hide-inspectors))
 
 ;;; The view ------------------------------------------------------------------
 
@@ -40,6 +41,14 @@ Returns (VALUES POINTER OBJECT)."
     (objc:invoke view "setSelectable:" t)
     (objc:invoke view "setAutoresizingMask:" +ns-view-width-and-height-sizable+)
     (objc:invoke view "setTypingAttributes:" (transcript-attributes :input))
+    ;; A link here is a printed value, and should go on looking like one: the
+    ;; pointing hand says it can be clicked, and nothing is recoloured or
+    ;; underlined, which is what a text view does to a link left to itself.
+    (let ((attributes (objc:invoke "NSMutableDictionary" "dictionary")))
+      (objc:invoke attributes "setObject:forKey:"
+                   (objc:invoke "NSCursor" "pointingHandCursor")
+                   (%ns-string-constant "NSCursorAttributeName"))
+      (objc:invoke view "setLinkTextAttributes:" attributes))
     (initialize-view-history object)
     ;; Its own delegate.  AppKit finds a delegate method through
     ;; -respondsToSelector:, which a real class_addMethod'd IMP satisfies, so
@@ -182,6 +191,7 @@ errors."
         (unless *listeners*
           (hide-canvas)
           (hide-preferences-window)
+          (hide-inspectors)
           (stop-run-loop-soon)))
     (error (condition) (note "windowWillClose: ~a" condition))))
 
@@ -407,6 +417,7 @@ and a menu item whose action no longer resolves is one nothing else notices."
                  '(("New Listener" "listenerNewListener:" "n")
                    :separator
                    ("History…" "listenerHistory:" "r")
+                   ("Inspect" "listenerInspect:" "i")
                    :separator
                    ("Interrupt" "listenerInterrupt:" ".")
                    ("Clear Transcript" "listenerClearTranscript:" "k"))

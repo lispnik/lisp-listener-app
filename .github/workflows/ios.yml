@@ -48,10 +48,10 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Check out sbcl-macos
+      - name: Check out lisp-listener-app
         uses: actions/checkout@v7
         with:
-          path: sbcl-macos
+          path: lisp-listener-app
 
       - name: Check out asdf-ios-app beside it
         uses: actions/checkout@v7
@@ -122,7 +122,7 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           ocicl setup
-          cd sbcl-macos
+          cd lisp-listener-app
           # ocicl exits 0 when a download fails and ghcr.io fails often enough
           # to matter, so: several attempts, and a failure here rather than a
           # mystery later.
@@ -141,7 +141,7 @@ jobs:
           echo "restored:" && ls ocicl
 
       - name: Report the toolchain the build will see
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: |
           ecl --version
           xcodebuild -version
@@ -154,11 +154,11 @@ jobs:
       - name: The headless test, on ECL
         # The Lisp the app runs on.  check.yml does this on Linux; here it is
         # the ECL that is about to drive the build.
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: make test-ecl
 
       - name: Build the app for the simulator
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         run: |
           set -o pipefail
           make ios 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
@@ -171,7 +171,7 @@ jobs:
         # tools/ios-selftest.sh picks the newest runtime's first of each, boots
         # it, runs the app with LISP_LISTENER_SELF_TEST, and reads the verdict
         # out of the app's console.log.  The pictures are kept below.
-        working-directory: sbcl-macos
+        working-directory: lisp-listener-app
         env:
           SHOTS: ${{ runner.temp }}/ios-shots
           HOLD: "1"

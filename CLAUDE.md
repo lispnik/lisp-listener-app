@@ -137,11 +137,11 @@ order is load-bearing**:
 
 - `lisp-listener/core` — `src/`: `package impl main-thread queue listener history
   sexp paredit keymap indent transcript completion paren-highlight paredit-view
-  history-search streams config restarts preferences files canvas examples
-  repl`. No toolkit; SBCL and ECL.
+  history-search streams config restarts preferences files canvas places views
+  inspector standard-views examples repl`. No toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
-  history-panel canvas-window preferences-window screenshot debugger-test demo
-  app`. The name it always had.
+  history-panel canvas-window preferences-window inspector-window screenshot
+  debugger-test demo app`. The name it always had.
 - `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet
   history-sheet canvas-sheet settings-sheet app`.
 
@@ -158,7 +158,8 @@ define: `transcript-color`, `transcript-font`, `main-thread-run-loop-modes`,
 `show-restarts-panel`, `hide-restarts-panel`, `restarts-panel-visible-p`,
 `current-listener`, the canvas's five (`canvas-toolkit`, `show-canvas`,
 `hide-canvas`, `canvas-visible-p`, `redisplay-canvas`, and `save-canvas-png`
-and `documents-directory` for `(save …)`), and the class
+and `documents-directory` for `(save …)`), the inspector's three
+(`inspector-capabilities`, `show-inspector`, `refresh-inspector`), and the class
 `listener-text-view`, with the same slots on
 both. The core only ever touches that class through `-textStorage`,
 `-selectedRange`, `-scrollRangeToVisible:` and `-typingAttributes`, which
@@ -246,6 +247,31 @@ NSTextView and UITextView share.
   (`canvas-pointer-event`) and a press is also the key `:click`. `(save
   "x.svg")` writes the display list out, all here; `(save "x.png")` is the
   front end's `save-canvas-png`, on thread 1, waited for.
+- **The inspector**, four files, all toolkit-free. The names a contributor
+  types are a third package, `INSPECTOR`, defined from inside `LISP-LISTENER`
+  as `CANVAS` is, and **not** imported into `CL-USER` (`text` is the canvas's).
+  - `src/places.lisp` — a `place` is where a value is: it answers its value,
+    whether it has one, what may be done to it (`:set`, `:remove`) and whether
+    a given value is acceptable. Clouseau's idea; it is what makes an edit a
+    property of the row and not of the table.
+  - `src/views.lisp` — `inspector:define-view` registers a view by type, an
+    optional `:when` predicate and a priority; `applicable-views` sorts by
+    priority, then the more specific type. **A view draws nothing**: it
+    answers a scene (`table`, `text`, `drawing`, `stack`, `section`), which is
+    data. A `drawing`'s body calls the canvas's functions with
+    `*canvas-frame*` bound, so they collect into a list. Options are declared
+    data, the view's own; `define-controls` contributes controls bound to
+    places, which belong to the object.
+  - `src/inspector.lisp` — the session (object, path, two panes, per-object
+    state) and the **worker thread**: a view is somebody's code, thread 1
+    never evaluates, and the listener thread is busy, so scenes are computed
+    and places written on a third thread and handed to thread 1 as a MODEL of
+    strings and shapes. With no `*main-thread-target*` a job runs where it is
+    asked for, which is the seam `make test` uses. `(inspect x)` is redirected
+    through `with-inspect-hook` (`impl.lisp`), and prints the model as text
+    where `inspector-capabilities` is empty -- iOS, for now.
+  - `src/standard-views.lisp` — the views that ship, written with
+    `define-view` and nothing else.
 - `src/examples.lisp` — `(examples)`, `(example "snake")`,
   `(example-source "snake")`, and `(example-edit "snake")`, which puts the
   source at the prompt. The twelve programs are `examples/*.lisp`, **read
@@ -299,6 +325,15 @@ NSTextView and UITextView share.
   with the last listener, like the canvas. `src/macos/window.lisp` has the
   other half of that file's job: `remember-windows` (as a window closes, and
   at `-applicationWillTerminate:`) and `restore-windows` (from `main` only).
+- `src/macos/inspector-window.lisp` — the inspector's window: a path bar, two
+  panes (a pop-up of views, a row of controls made from the view's options,
+  and a drawing, a cell-based table and text sharing the room), and the object
+  panel (what it is, the selected row and a field to change it, the
+  contributed controls, the views and who contributed each). It shows the
+  model and evaluates nothing; every action is a request whose answer is a
+  new model. The drawing is painted by `paint-shapes`, the canvas's painter.
+  Controls are told new values rather than rebuilt while their set is
+  unchanged -- a slider rebuilt mid-drag is a slider let go of.
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
   produces `doc/screenshots/`, on a CI runner, on every push.
 - `src/macos/demo.lisp` — `LISP_LISTENER_DEMO=<dir>` plays a scripted session a
@@ -314,8 +349,9 @@ NSTextView and UITextView share.
   docking, frames and locals, the keys, the divider, the value field, Escape,
   a second level, the history sheet, a second listener beside the first,
   File ▸ Open…, a dropped file and Save Transcript…, the Examples menu and the
-  canvas (its keys, its mouse, saving it), Settings and the View menu, and
-  the remembered windows.
+  canvas (its keys, its mouse, saving it), Settings and the View menu, the
+  remembered windows, and the inspector (its window, options, navigation, an
+  edit, contributed controls, and each of the four ways of opening one).
   Exits 0 only if every check held; `macos.yml` runs it on
   both architectures. **Everything in the pane is AppKit, so the headless test
   reaches none of it**; every bug in the pane's first versions was found by
@@ -633,6 +669,15 @@ Each of these is a bug that actually happened here.
   only for the input's first line -- every other line starts at the margin
   and is super's. iOS claims C-a and ⌘← as key commands, and having claimed
   them must do the whole job (`move-to-input-line-start`).
+
+- **A printed value is a link, and a link is repainted.** Values in the
+  transcript carry `NSLinkAttributeName` so that a click opens the inspector
+  (`print-values` writes each as kind `(:value id)`; `transcript-insert` adds
+  the link). A text view left to itself draws a link blue and underlined: the
+  Mac view's `linkTextAttributes` are set to a pointing-hand cursor and
+  nothing else, and on iOS, where there is no inspector to open, the
+  attribute is not added at all. The values are KEPT so that they can be
+  opened -- the last 500 a listener printed, until the transcript is cleared.
 
 - **UIKit presents only from the top of the stack.** Asked to present from a
   controller that is already presenting, it logs a warning and does nothing: an
