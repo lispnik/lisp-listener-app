@@ -5,7 +5,8 @@
 ;;;; the inspector's first -- and one inspector on screen: a second (inspect x)
 ;;;; takes the sheet over.  From the top:
 ;;;;
-;;;;   - Back, the path walked so far, and Done;
+;;;;   - Back, the path walked so far, Views -- a list of every view there is,
+;;;;     with why each that does not apply does not -- and Done;
 ;;;;   - the views that apply, as a segmented control;
 ;;;;   - the chosen view's options, and the controls contributed for the object;
 ;;;;   - what the view's scene comes to: a drawing, a table, some text, or a
@@ -150,8 +151,10 @@ stretch of the table that is scrolled to."
 
 (define-sheet-method ("tableView:numberOfRowsInSection:" (:signed :long-long) :on-error 0)
     ((table objc:objc-object-pointer) (section (:signed :long-long)))
-  (let ((model (sheet-table-model inspector)))
-    (if model (table-model-count model) 0)))
+  (if (views-list-table-p table)
+      (length (inspector-part inspector :list-rows))
+      (let ((model (sheet-table-model inspector)))
+        (if model (table-model-count model) 0))))
 
 (defun make-inspector-cell (row)
   "One row, AUTORELEASED.  A heading is bold and cannot be chosen.  Any other
@@ -191,14 +194,18 @@ grey: the Mac's columns, stacked for a phone's width."
 (define-sheet-method ("tableView:cellForRowAtIndexPath:" objc:objc-object-pointer
                       :on-error (make-blank-cell))
     ((table objc:objc-object-pointer) (index-path objc:objc-object-pointer))
-  (make-inspector-cell (sheet-row inspector (objc:invoke index-path "row"))))
+  (if (views-list-table-p table)
+      (make-views-list-cell inspector (nth (objc:invoke index-path "row")
+                                           (inspector-part inspector :list-rows)))
+      (make-inspector-cell (sheet-row inspector (objc:invoke index-path "row")))))
 
 (define-sheet-method ("tableView:heightForRowAtIndexPath:" :double
                       :on-error *inspector-sheet-row-height*)
     ((table objc:objc-object-pointer) (index-path objc:objc-object-pointer))
   (let* ((model (sheet-table-model inspector))
          (row (and model (table-row model (objc:invoke index-path "row")))))
-    (cond ((and row (row-header-p row)) *inspector-sheet-header-height*)
+    (cond ((views-list-table-p table) 54d0)
+          ((and row (row-header-p row)) *inspector-sheet-header-height*)
           ;; A row of one cell has no label under it.
           ((and row (null (rest (row-cells row)))) 34d0)
           (t *inspector-sheet-row-height*))))
@@ -208,12 +215,141 @@ grey: the Mac's columns, stacked for a phone's width."
     ((table objc:objc-object-pointer) (index-path objc:objc-object-pointer))
   (let* ((model (sheet-table-model inspector))
          (row (and model (table-row model (objc:invoke index-path "row")))))
-    (if (and row (not (row-header-p row))) index-path (cffi:null-pointer))))
+    (cond ((views-list-table-p table)
+           ;; A view that does not apply is there to be read, not chosen.
+           (if (getf (nth (objc:invoke index-path "row")
+                          (inspector-part inspector :list-rows))
+                     :applies)
+               index-path
+               (cffi:null-pointer)))
+          ((and row (not (row-header-p row))) index-path)
+          (t (cffi:null-pointer)))))
 
 (define-sheet-method ("tableView:didSelectRowAtIndexPath:" :void)
     ((table objc:objc-object-pointer) (index-path objc:objc-object-pointer))
-  (setf (inspector-part inspector :selection) (objc:invoke index-path "row"))
-  (show-inspector-selection inspector))
+  (cond ((views-list-table-p table)
+         (let ((row (nth (objc:invoke index-path "row")
+                         (inspector-part inspector :list-rows))))
+           (when (and row (getf row :applies))
+             (hide-views-list inspector)
+             (inspector-select-view inspector 0 (getf row :name)))))
+        (t
+         (setf (inspector-part inspector :selection) (objc:invoke index-path "row"))
+         (show-inspector-selection inspector))))
+
+;;; Every view there is ---------------------------------------------------------------
+;;;
+;;; A second sheet, over the inspector's: the views that apply, and under them
+;;; the ones that do not, each saying why -- the Mac's All Views sheet, for a
+;;; phone's width.  A tap on one that applies shows it.  Its table shares the
+;;; inspector's controller and is told apart by its tag.
+
+(defconstant +views-list-tag+ 1)
+
+(defun views-list-table-p (table)
+  (= +views-list-tag+ (objc:invoke table "tag")))
+
+(defun make-views-list-cell (inspector row)
+  "One view, AUTORELEASED: its title over what it is matched by and who
+contributed it -- or, where it does not apply, why not, in grey."
+  (if (null row)
+      (make-blank-cell)
+      (let* ((cell (objc:invoke (objc:invoke "UITableViewCell" "alloc")
+                                "initWithStyle:reuseIdentifier:" 3 "view"))
+             (label (objc:invoke cell "textLabel"))
+             (detail (objc:invoke cell "detailTextLabel"))
+             (pane (sheet-pane-model inspector))
+             (secondary (objc:invoke "UIColor" "secondaryLabelColor")))
+        (objc:invoke label "setText:" (getf row :title))
+        (objc:invoke label "setFont:" (uikit:font (+ *inspector-sheet-font-size* 2)))
+        (objc:invoke detail "setFont:" (uikit:font (- *inspector-sheet-font-size* 2)))
+        (objc:invoke detail "setTextColor:" secondary)
+        (cond ((getf row :applies)
+               (objc:invoke detail "setText:"
+                            (format nil "~a  ·  ~a" (getf row :matches) (getf row :contributor)))
+               ;; UITableViewCellAccessoryCheckmark, on the one that is showing.
+               (when (and pane (eq (getf row :name) (pane-model-view-name pane)))
+                 (objc:invoke cell "setAccessoryType:" 3)))
+              (t
+               (objc:invoke label "setTextColor:" secondary)
+               (objc:invoke detail "setText:" (or (getf row :reason) "Does not apply."))
+               (objc:invoke cell "setSelectionStyle:" 0)))
+        (objc:autorelease cell))))
+
+(defun views-list-up-p (&optional (inspector *inspector-shown*))
+  (let ((list (and inspector (inspector-part inspector :list-controller))))
+    (and (live-pointer-p list)
+         (live-pointer-p (objc:invoke list "presentingViewController")))))
+
+(defun hide-views-list (&optional (inspector *inspector-shown*))
+  "Take the list down and let go of it.  Idempotent."
+  ;; Its table KEEPS its data source.  A sheet on its way out is still a table
+  ;; on screen, and on an iPad the focus engine walks it then: with nobody to
+  ;; ask, a row it had been promised has no cell, which is an assertion in
+  ;; UITableView and the end of the app.  The controller outlives the sheet
+  ;; and answers a blank cell for a row it no longer has.
+  (let ((list (and inspector (inspector-part inspector :list-controller))))
+    (when (live-pointer-p list)
+      (let ((listener (or (inspector-listener inspector) (current-listener))))
+        (when listener
+          (dismiss-sheet-when-settled (listener-view listener) list nil)))
+      (objc:autorelease list))
+    (when inspector
+      (setf (inspector-part inspector :list-controller) nil
+            (inspector-part inspector :list-table) nil))
+    t))
+
+(defun show-views-list (&optional (inspector *inspector-shown*))
+  "Present the list of every view, over INSPECTOR's sheet."
+  (hide-views-list inspector)
+  (let* ((model (inspector-model inspector))
+         (target (sheet-target inspector))
+         (controller (objc:invoke (objc:invoke "UIViewController" "alloc") "init"))
+         (root (objc:invoke controller "view"))
+         (header (sheet-stack 0 10d0))
+         (title (sheet-label "Views" :size 17d0 :bold t))
+         (close (uikit:system-button "Close"))
+         (table (uikit:new "UITableView"))
+         (hint (sheet-label (format nil "To add one of your own:~%(inspector:define-view (my-view :title \"Mine\" ~a)~%    (object)~%  (inspector:text \"~~a\" object))"
+                                    (model-match model))
+                            :size 11d0 :mono t :secondary t))
+         (margin *inspector-sheet-margin*))
+    (setf (inspector-part inspector :list-rows) (model-views-sorted model)
+          (inspector-part inspector :list-controller) controller
+          (inspector-part inspector :list-table) table)
+    (objc:invoke root "setBackgroundColor:" (objc:invoke "UIColor" "systemBackgroundColor"))
+    (objc:invoke title "setContentHuggingPriority:forAxis:" 1.0 0)
+    (sheet-action close inspector "sheetCloseList:")
+    (objc:invoke header "addArrangedSubview:" title)
+    (objc:invoke header "addArrangedSubview:" close)
+    (objc:invoke table "setTag:" +views-list-tag+)
+    (objc:invoke table "setDataSource:" target)
+    (objc:invoke table "setDelegate:" target)
+    (objc:invoke hint "setNumberOfLines:" 0)
+    (dolist (view (list header table hint))
+      (objc:invoke root "addSubview:" view))
+    (let ((safe (objc:invoke root "safeAreaLayoutGuide")))
+      (uikit:pin header "topAnchor" root "topAnchor" (+ margin 6))
+      (uikit:pin header "leadingAnchor" safe "leadingAnchor" margin)
+      (uikit:pin header "trailingAnchor" safe "trailingAnchor" (- margin))
+      (uikit:pin table "topAnchor" header "bottomAnchor" 8)
+      (uikit:pin table "leadingAnchor" root "leadingAnchor")
+      (uikit:pin table "trailingAnchor" root "trailingAnchor")
+      (uikit:pin table "bottomAnchor" hint "topAnchor" -8)
+      (uikit:pin hint "leadingAnchor" safe "leadingAnchor" margin)
+      (uikit:pin hint "trailingAnchor" safe "trailingAnchor" (- margin))
+      (uikit:pin hint "bottomAnchor" safe "bottomAnchor" (- margin)))
+    (handler-case (objc:invoke (inspector-part inspector :controller)
+                               "presentViewController:animated:completion:"
+                               controller nil nil)
+      (error (condition) (note "inspector: ~a" condition)))
+    (views-list-up-p inspector)))
+
+(define-sheet-method ("sheetAllViews:" :void) ((sender objc:objc-object-pointer))
+  (show-views-list inspector))
+
+(define-sheet-method ("sheetCloseList:" :void) ((sender objc:objc-object-pointer))
+  (hide-views-list inspector))
 
 ;;; The row selected, and what can be done with it -----------------------------------
 
@@ -511,6 +647,7 @@ inspector's, until FORGET-INSPECTOR-SHEET."
          (header (sheet-stack 0 10d0))
          (back (uikit:system-button "‹ Back"))
          (path (sheet-label "" :bold t))
+         (all-views (uikit:system-button "Views"))
          (done (uikit:system-button "Done"))
          (message (sheet-label "" :size 12d0 :secondary t))
          (views (uikit:new "UISegmentedControl"))
@@ -528,7 +665,8 @@ inspector's, until FORGET-INSPECTOR-SHEET."
     (setf (sheet-controller-inspector object) inspector)
     (setf (inspector-retained inspector)
           (list :controller controller :controller-object object
-                :path path :back back :done done :message message :views views
+                :path path :back back :done done :all-views all-views
+                :message message :views views
                 :options options :controls controls
                 :drawing drawing :drawing-object drawing-object :native-host native-host
                 :table table :text text :caption caption :field field
@@ -541,7 +679,8 @@ inspector's, until FORGET-INSPECTOR-SHEET."
     (objc:invoke path "setContentCompressionResistancePriority:forAxis:" 1.0 0)
     (sheet-action back inspector "sheetBack:")
     (sheet-action done inspector "sheetDone:")
-    (dolist (view (list back path done))
+    (sheet-action all-views inspector "sheetAllViews:")
+    (dolist (view (list back path all-views done))
       (objc:invoke header "addArrangedSubview:" view))
     (objc:invoke message "setNumberOfLines:" 2)
     (objc:invoke views "setApportionsSegmentWidthsByContent:" t)
@@ -622,10 +761,11 @@ warning, not a result.  See PRESENT-CANVAS-SHEET."
   (let ((controller (inspector-part inspector :controller))
         (listener (or (inspector-listener inspector) (current-listener))))
     (when (and (live-pointer-p controller) listener (not (inspector-sheet-up-p inspector)))
-      (handler-case (objc:invoke (presenting-controller listener)
-                                 "presentViewController:animated:completion:"
-                                 controller nil nil)
-        (error (condition) (note "inspector: ~a" condition)))
+      (let ((presenter (settled-presenter (listener-view listener))))
+        (when presenter
+          (handler-case (objc:invoke presenter "presentViewController:animated:completion:"
+                                     controller nil nil)
+            (error (condition) (note "inspector: ~a" condition)))))
       (cond ((inspector-sheet-up-p inspector)
              (setf (inspector-part inspector :tries) 0)
              t)
@@ -634,19 +774,31 @@ warning, not a result.  See PRESENT-CANVAS-SHEET."
                           (objc:coerce-to-selector "sheetPresent") nil 0.25d0)
              nil)))))
 
+(defvar *retired-sheet-controllers* '()
+  "The controllers of the last few inspector sheets put away, newest first.
+A sheet on its way out still has tables on screen, and they hold their data
+source weakly: were it collected with its inspector, the next cell asked for
+would be nobody's.  Held a while -- until three more have gone -- and no
+longer, since a controller holds its inspector and so whatever was inspected.")
+
 (defun forget-inspector-sheet (inspector)
   "The sheet has gone, or is going: let go of it, and end the inspector."
   (let ((controller (inspector-part inspector :controller))
-        (table (inspector-part inspector :table)))
-    (when (live-pointer-p table)
-      ;; A table on its way out is still asked for cells; let it ask nobody.
-      (objc:invoke table "setDataSource:" (cffi:null-pointer))
-      (objc:invoke table "setDelegate:" (cffi:null-pointer)))
+        (object (inspector-part inspector :controller-object)))
+    ;; The list over it goes with it.  The tables keep their data source: see
+    ;; HIDE-VIEWS-LIST.
+    (let ((list (inspector-part inspector :list-controller)))
+      (when (live-pointer-p list)
+        (objc:autorelease list)))
     (when (live-pointer-p controller)
       (objc:autorelease controller))
+    (when object
+      (setf *retired-sheet-controllers*
+            (subseq (cons object (remove object *retired-sheet-controllers*))
+                    0 (min 4 (1+ (length (remove object *retired-sheet-controllers*)))))))
     ;; The controller object is kept: a delayed "sheetPresent" may be on its way.
     (setf (inspector-retained inspector)
-          (list :controller-object (inspector-part inspector :controller-object)))
+          (list :controller-object object))
     (when (eq *inspector-shown* inspector)
       (setf *inspector-shown* nil))
     (inspector-closed inspector)
@@ -655,9 +807,12 @@ warning, not a result.  See PRESENT-CANVAS-SHEET."
 (defun hide-inspector (&optional (inspector *inspector-shown*))
   "Dismiss INSPECTOR's sheet and end it.  Idempotent."
   (when inspector
-    (when (inspector-sheet-up-p inspector)
-      (objc:invoke (inspector-part inspector :controller)
-                   "dismissViewControllerAnimated:completion:" nil nil))
+    (let ((controller (inspector-part inspector :controller))
+          (listener (or (inspector-listener inspector) (current-listener))))
+      ;; Up, or on its way up: see DISMISS-SHEET-WHEN-SETTLED.  Not animated:
+      ;; another inspector's sheet may be about to take its place.
+      (when (and listener (live-pointer-p controller))
+        (dismiss-sheet-when-settled (listener-view listener) controller nil)))
     (forget-inspector-sheet inspector))
   t)
 
@@ -712,10 +867,14 @@ scene has it."
         (pane (sheet-pane-model inspector)))
     (when (and model pane (live-pointer-p (inspector-part inspector :controller)))
       ;; Somewhere else than last time: the row that was selected is not here.
-      (unless (equal (model-path model) (inspector-part inspector :path-shown))
+      ;; Told by the OBJECTS walked through, not their labels, which change
+      ;; whenever what they print does.
+      (unless (same-steps-p (model-steps model) (inspector-part inspector :steps-shown))
         (setf (inspector-part inspector :selection) nil
               (inspector-part inspector :rows-asked) -1
-              (inspector-part inspector :path-shown) (model-path model))
+              (inspector-part inspector :steps-shown) (model-steps model)
+              ;; And its controls are another object's.
+              (inspector-part inspector :control-signature) nil)
         (objc:invoke (inspector-part inspector :field) "setText:" ""))
       (objc:invoke (inspector-part inspector :path) "setText:"
                    (format nil "~{~a~^ › ~}" (model-path model)))
@@ -748,7 +907,7 @@ scene has it."
               do (set-sheet-option control option))
         (objc:invoke (inspector-part inspector :options) "setHidden:"
                      (null (pane-model-options pane))))
-      (let ((signature (cons (model-path model)
+      (let ((signature (cons :controls
                              (mapcar (lambda (control)
                                        (list (control-model-kind control)
                                              (control-model-label control)))
@@ -788,7 +947,8 @@ scene has it."
 ;;; For the self-test -----------------------------------------------------------------
 
 (defun press-inspector-button (key &optional (inspector *inspector-shown*))
-  "Tap the sheet's button KEY -- :OPEN :SET :INSERT :REMOVE :ADD :BACK :DONE --
+  "Tap the sheet's button KEY -- :OPEN :SET :INSERT :REMOVE :ADD :BACK :DONE
+:ALL-VIEWS --
 as a finger would.  NIL if it is not there or not enabled."
   (let ((button (and inspector (inspector-part inspector key))))
     (when (and (live-pointer-p button) (objc:invoke-bool button "isEnabled"))

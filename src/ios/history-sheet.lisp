@@ -129,8 +129,7 @@
   (let ((controller (build-history-sheet listener)))
     ;; The +1 from -alloc is the listener's, until HIDE-HISTORY-POPUP.
     (setf (listener-history-panel listener) controller)
-    (objc:invoke (presenting-controller listener)
-                 "presentViewController:animated:completion:" controller t nil)
+    (present-sheet listener controller)
     controller))
 
 (defun hide-history-popup (&optional (listener *listener*))
@@ -138,9 +137,7 @@
   (let ((controller (and listener (listener-history-panel listener))))
     (when (and controller (cffi:pointerp controller)
                (not (cffi:null-pointer-p controller)))
-      (let ((presenter (objc:invoke controller "presentingViewController")))
-        (when (and presenter (not (cffi:null-pointer-p presenter)))
-          (objc:invoke controller "dismissViewControllerAnimated:completion:" t nil)))
+      (dismiss-sheet-when-settled (listener-view listener) controller)
       (objc:release controller))
     (forget-history-popup listener))
   t)

@@ -139,6 +139,12 @@ none.  Asked of NSURL, which is how a file arrives from the Finder."
   (define-line-start "moveToBeginningOfLineAndModifySelection:" t)
   (define-line-start "moveToLeftEndOfLineAndModifySelection:" t))
 
+(defun add-value-link (storage range link)
+  "Make RANGE of the transcript a link whose text is LINK.  AppKit tells the
+view of a click on one: -textView:clickedOnLink:atIndex:."
+  (objc:invoke storage "addAttribute:value:range:"
+               (%ns-string-constant "NSLinkAttributeName") link range))
+
 ;;; A value printed at the prompt is a link to itself (TRANSCRIPT-INSERT), and
 ;;; a click on one opens the inspector on it.  Answering true says the click
 ;;; has been dealt with; a link that is not ours is left to AppKit.

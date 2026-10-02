@@ -77,12 +77,22 @@ begins.  UTF-16 units, thread 1 only.")
    (history-index :initform nil :accessor view-history-index
                   :documentation "How far back RECALL-HISTORY has gone, or NIL
 while a fresh line is being typed.")
+   (tap-delegate :initform nil :accessor view-tap-delegate
+                 :documentation "The tap recognizer's delegate, held here
+because a recognizer holds its delegate weakly.")
+   (tap-armed :initform nil :accessor view-tap-armed
+              :documentation "Whether the view had the keyboard when the touch
+now on it began: only then is a tap on a value a wish to inspect it.")
    (paren-marks :initform '() :accessor view-paren-marks
                 :documentation "The ranges the paren highlight last tinted, so
 that they can be untinted.  Thread 1 only; see src/paren-highlight.lisp."))
   (:objc-class-name "LispListenerView")
   (:objc-superclass-name "UITextView")
   (:objc-protocols "UITextViewDelegate"))
+
+(objc:define-objc-class listener-tap-delegate ()
+  ((view :initform nil :accessor tap-delegate-view))
+  (:objc-class-name "LispListenerTapDelegate"))
 
 ;;; UIKit enumerations, by value.
 (defconstant +ui-text-autocorrection-no+ 1)
@@ -134,7 +144,96 @@ Returns (VALUES POINTER OBJECT)."
       (objc:invoke view "setInputAccessoryView:" bar)
       ;; -setInputAccessoryView: retains it; the +1 from -alloc is ours.
       (objc:release bar))
+    ;; A tap on a printed value opens the inspector on it.  Beside the text
+    ;; view's own recognizers, not instead of them, which its delegate says --
+    ;; an object of its own, NOT the view: a UITextView is a scroll view, the
+    ;; delegate of its own pan, and answering for that one too is how to get
+    ;; a transcript that scrolls and does something else at once.
+    (let ((tap (objc:invoke (objc:invoke "UITapGestureRecognizer" "alloc")
+                            "initWithTarget:action:" view "listenerTap:"))
+          (delegate (make-instance 'listener-tap-delegate)))
+      (setf (tap-delegate-view delegate) object
+            (view-tap-delegate object) delegate)
+      (objc:invoke tap "setCancelsTouchesInView:" nil)
+      (objc:invoke tap "setDelegate:" (objc:objc-object-pointer delegate))
+      (objc:invoke view "addGestureRecognizer:" tap)
+      (objc:release tap))
     (values view object)))
+
+;;; A printed value, and a tap on it ----------------------------------------------
+;;;
+;;; The Mac marks a value with NSLinkAttributeName and is told of a click.  A
+;;; UITextView that can be edited does not follow links, and paints one blue
+;;; and underlined besides, so here the mark is an attribute of our own, and
+;;; the tap is found by asking the storage what is at the character tapped.
+
+(defparameter +value-link-attribute+ "LispListenerValue")
+
+(defun add-value-link (storage range link)
+  "Mark RANGE of the transcript as the value LINK names.  Nothing to see: an
+underline under every value was tried, and a transcript of pathnames was
+mostly underline."
+  (objc:invoke storage "addAttribute:value:range:" +value-link-attribute+ link range))
+
+(defun transcript-value-link-at (pointer offset)
+  "The value link at character OFFSET of the transcript, UTF-16, or NIL."
+  (let ((storage (objc:invoke pointer "textStorage")))
+    (when (< -1 offset (objc:invoke storage "length"))
+      (let ((link (objc:invoke storage "attribute:atIndex:effectiveRange:"
+                               +value-link-attribute+ offset (cffi:null-pointer))))
+        (and (live-pointer-p link) (objc:ns-string-to-string link))))))
+
+(defun tap-transcript-value (listener pointer offset)
+  "Open the inspector on the printed value at character OFFSET, if there is
+one there and it is still kept.  True if it was opened."
+  (let ((link (transcript-value-link-at pointer offset)))
+    (and link (inspect-shown-value listener link))))
+
+(defun tapped-character-offsets (pointer point)
+  "The characters either side of the insertion point nearest POINT -- if POINT
+is ON the text there, and not merely on the same line as it or under the last
+of it: the nearest position to a tap in the margin is still a position."
+  (let* ((position (objc:invoke pointer "closestPositionToPoint:" point))
+         (caret (and (live-pointer-p position)
+                     (objc:invoke pointer "caretRectForPosition:" position))))
+    (when (and caret
+               (<= (- (aref caret 1) 3) (aref point 1) (+ (aref caret 1) (aref caret 3) 3))
+               (<= (abs (- (aref point 0) (aref caret 0))) 14))
+      (let ((offset (objc:invoke pointer "offsetFromPosition:toPosition:"
+                                 (objc:invoke pointer "beginningOfDocument") position)))
+        (if (>= (aref point 0) (aref caret 0))
+            (list offset (1- offset))
+            (list (1- offset) offset))))))
+
+;;; Only a tap made while the view already had the keyboard counts.  The tap
+;;; that brings the keyboard up lands wherever the thumb happens to, and should
+;;; not open an inspector because a value was under it.
+(objc:define-objc-method ("gestureRecognizer:shouldReceiveTouch:" objc:objc-bool)
+    ((self listener-tap-delegate)
+     (recognizer objc:objc-object-pointer) (touch objc:objc-object-pointer))
+  (declare (ignorable recognizer touch))
+  (handler-case
+      (let ((view (tap-delegate-view self)))
+        (when view
+          (setf (view-tap-armed view)
+                (objc:invoke-bool (objc:objc-object-pointer view) "isFirstResponder")))
+        t)
+    (error (condition) (note "shouldReceiveTouch: ~a" condition) t)))
+
+(objc:define-objc-method ("gestureRecognizer:shouldRecognizeSimultaneouslyWithGestureRecognizer:"
+                          objc:objc-bool)
+    ((self listener-tap-delegate)
+     (recognizer objc:objc-object-pointer) (other objc:objc-object-pointer))
+  (declare (ignorable recognizer other))
+  t)
+
+;;; UIGestureRecognizerStateEnded is 3.
+(define-listener-method ("listenerTap:" :void) ((recognizer objc:objc-object-pointer))
+  (when (and (= 3 (objc:invoke recognizer "state")) (view-tap-armed self))
+    (let ((point (objc:invoke recognizer "locationInView:" pointer)))
+      (dolist (offset (tapped-character-offsets pointer point))
+        (when (tap-transcript-value *listener* pointer offset)
+          (return))))))
 
 ;;; The key bar -----------------------------------------------------------------
 

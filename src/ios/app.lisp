@@ -535,6 +535,15 @@ A step whose predicate has not held within its time fails."
              (choose-history-row listener 0)
              (unless (string= (pending-input view pointer) "(example \"spiral\")")
                (error "chose ~s" (pending-input view pointer))))))
+   ;; Opened as the restarts' sheet was leaving, so UIKit put its arrival off,
+   ;; and chosen from before it had arrived: it must go all the same, and not
+   ;; merely be forgotten.  See DISMISS-SHEET-WHEN-SETTLED.
+   (list "and the list really is put away"
+         (lambda () (not (live-pointer-p
+                          (objc:invoke (objc:invoke (objc:invoke (listener-view listener) "window")
+                                                    "rootViewController")
+                                       "presentedViewController"))))
+         nil)
    (list "Return runs it" (lambda () (not (history-popup-visible-p listener)))
          (lambda ()
            (submit-input (listener-view-object listener) (listener-view listener))))
@@ -766,17 +775,49 @@ A step whose predicate has not held within its time fails."
    (list "and Back walks out"
          (lambda () (= 1 (length (model-path (inspector-model *inspector-shown*)))))
          (lambda ()
+           ;; The path's label is the list as it is NOW, not as it was opened.
+           (let ((label (first (model-path (inspector-model *inspector-shown*)))))
+             (unless (search ":NEW" label)
+               (error "the path still says ~a" label)))
+           (unless (press-inspector-button :all-views)
+             (error "Views could not be pressed"))))
+   (list "Views lists every view there is"
+         (lambda () (views-list-up-p))
+         (lambda ()
+           (let* ((inspector *inspector-shown*)
+                  (rows (inspector-part inspector :list-rows))
+                  (table (inspector-part inspector :list-table))
+                  (histogram (find "Histogram" rows :key (lambda (row) (getf row :title))
+                                                    :test #'string=))
+                  (object (position "Object" rows :key (lambda (row) (getf row :title))
+                                                  :test #'string=)))
+             (unless (= (length *views*) (objc:invoke table "numberOfRowsInSection:" 0))
+               (error "the list has ~d rows for ~d views"
+                      (objc:invoke table "numberOfRowsInSection:" 0) (length *views*)))
+             (unless (and histogram (not (getf histogram :applies))
+                          (search "Needs" (getf histogram :reason)))
+               (error "the histogram's row says ~s" histogram))
+             ;; A tap on one that applies.
+             (objc:invoke (sheet-target inspector) "tableView:didSelectRowAtIndexPath:"
+                          table
+                          (objc:invoke "NSIndexPath" "indexPathForRow:inSection:" object 0)))))
+   (list :hold nil nil)
+   (list "and a tap on one that applies shows it, and puts the list away"
+         (lambda () (and (not (views-list-up-p))
+                         (equal "Object"
+                                (pane-model-view-title (sheet-pane-model *inspector-shown*)))))
+         (lambda ()
            ;; Another view, through the segmented control.
            (let* ((inspector *inspector-shown*)
                   (views (inspector-part inspector :views))
-                  (index (position "Object"
+                  (index (position "Describe"
                                    (pane-model-choices (sheet-pane-model inspector))
                                    :key #'cdr :test #'string=)))
              (objc:invoke views "setSelectedSegmentIndex:" index)
              (objc:invoke views "sendActionsForControlEvents:"
                           +ui-control-event-value-changed+))))
    (list "choosing a view shows it"
-         (lambda () (equal "Object"
+         (lambda () (equal "Describe"
                            (pane-model-view-title (sheet-pane-model *inspector-shown*))))
          (lambda ()
            (unless (press-inspector-button :done)
@@ -784,6 +825,30 @@ A step whose predicate has not held within its time fails."
    (list "Done puts the inspector away, and ends it"
          (lambda () (and (null *inspector-shown*) (null *inspectors*)))
          nil)
+   ;; INSPECT's own value is not printed under it: ECL's answers its argument.
+   (list "what was inspected is not printed again under the prompt"
+         (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (let* ((text (self-test-text listener))
+                  (from (search "(inspect (list :alpha :beta))" text :from-end t)))
+             (when (search "(:ALPHA :BETA)" text :start2 from)
+               (error "the transcript has the list after the form")))
+           (type-line listener "(list :tap :me)")))
+   ;; A printed value is the way to its inspector.
+   (list "a tap on a printed value"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (search "(:TAP :ME)" (self-test-text listener))))
+         (lambda ()
+           (let* ((text (self-test-text listener))
+                  (at (search "(:TAP :ME)" text)))
+             (unless (tap-transcript-value listener (listener-view listener)
+                                           (utf-16-length (subseq text 0 (1+ at))))
+               (error "there was no value to open at ~d" at)))))
+   (list "opens the inspector on it"
+         (lambda () (and (inspector-sheet-up-p)
+                         (equal (inspector-object *inspector-shown*) '(:tap :me))))
+         (lambda () (hide-inspector)))
+   (list "which is put away" (lambda () (null *inspectors*)) nil)
    ;; A drawing, with an option, and a readout under the finger.
    (list "a byte vector is inspected" (lambda () (at-top-level-prompt-p listener))
          (lambda ()

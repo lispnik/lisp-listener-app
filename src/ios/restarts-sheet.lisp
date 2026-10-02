@@ -371,8 +371,7 @@ Thread 1."
                                           backtrace)))
     ;; The +1 from -alloc is the listener's, until HIDE-RESTARTS-PANEL.
     (setf (listener-restarts-panel listener) controller)
-    (objc:invoke (presenting-controller listener)
-                 "presentViewController:animated:completion:" controller t nil)
+    (present-sheet listener controller)
     controller))
 
 (defun presenting-controller (listener)
@@ -391,6 +390,153 @@ restarts on screen at all.  A controller on its way out does not count."
           do (setf controller presented))
     controller))
 
+;;; Putting a sheet up, and taking one down --------------------------------------
+;;;
+;;; UIKit will do neither while a transition is in flight, and says so with a
+;;; warning in the log and not with a result:
+;;;
+;;;   - a dismissal asked for while the sheet is still arriving is dropped;
+;;;   - a presentation asked for from a controller in mid-transition is put
+;;;     off, and one asked for over a sheet that is about to go, goes with it;
+;;;   - and -dismissViewController... sent to a sheet that has another on top
+;;;     of it dismisses the one on top, and not the sheet it was sent to.
+;;;
+;;; Each of those left a sheet on screen that the program had already
+;;; forgotten, with nothing left to take it down: the Try list, opened as the
+;;; restarts went, stayed for good.  So both are ASKED AGAIN, every 0.15 s,
+;;; until they can be done: a sheet is presented once whatever is leaving has
+;;; left, and dismissed -- through its presenter, so that it is the one that
+;;; goes -- once it has arrived and stopped moving.  Hiding a sheet that has
+;;; not been presented yet cancels the presenting.  Every sheet here comes
+;;; and goes this way.  -performSelector:withObject:afterDelay: retains the
+;;; controller meanwhile, so the caller's own reference can go at once.
+
+(defparameter *sheet-dismiss-tries* 14
+  "How many times a sheet that is not there to dismiss is looked for again.")
+
+(defparameter *sheet-present-tries* 40
+  "How many times a sheet waits for the way to be clear.")
+
+(defvar *sheet-dismissals* '()
+  "(ADDRESS TRIES-LEFT ANIMATED) for each sheet waiting to go.  Thread 1.")
+
+(defvar *sheet-presentations* '()
+  "(ADDRESS TRIES-LEFT ANIMATED) for each sheet waiting to come.  Thread 1.")
+
+(defun sheet-entry (controller table)
+  (assoc (cffi:pointer-address controller) table))
+
+(defun in-transition-p (controller)
+  (live-pointer-p (objc:invoke controller "transitionCoordinator")))
+
+(defun settled-presenter (view)
+  "The controller a sheet can be presented from NOW, in VIEW's window: the top
+of what is presented -- or NIL while anything there is arriving, leaving, or
+waiting to be told to leave."
+  (let* ((window (objc:invoke view "window"))
+         (controller (and (live-pointer-p window)
+                          (objc:invoke window "rootViewController"))))
+    (loop
+      (when (or (not (live-pointer-p controller)) (in-transition-p controller))
+        (return nil))
+      (let ((presented (objc:invoke controller "presentedViewController")))
+        (cond ((not (live-pointer-p presented)) (return controller))
+              ((or (objc:invoke-bool presented "isBeingDismissed")
+                   (sheet-entry presented *sheet-dismissals*))
+               (return nil))
+              (t (setf controller presented)))))))
+
+(defun cancel-sheet-dismissal (controller)
+  "Stop waiting to dismiss CONTROLLER: it is wanted after all.  For a sheet
+whose controller is kept and presented again -- the canvas's -- where a
+dismissal still pending would take down the sheet just put back up."
+  (when (live-pointer-p controller)
+    (setf *sheet-dismissals*
+          (remove (cffi:pointer-address controller) *sheet-dismissals* :key #'first)))
+  t)
+
+(defun cancel-sheet-presentation (controller)
+  "Stop waiting to present CONTROLLER.  True if it was waiting."
+  (when (live-pointer-p controller)
+    (let ((entry (sheet-entry controller *sheet-presentations*)))
+      (when entry
+        (setf *sheet-presentations* (remove entry *sheet-presentations*))
+        t))))
+
+(defun sheet-later (view selector controller)
+  (objc:invoke view "performSelector:withObject:afterDelay:"
+               (objc:coerce-to-selector selector) controller 0.15d0))
+
+(defun continue-sheet-presentation (view controller)
+  (let ((entry (sheet-entry controller *sheet-presentations*)))
+    (when entry
+      (flet ((done () (setf *sheet-presentations* (remove entry *sheet-presentations*))))
+        (let ((presenter (settled-presenter view)))
+          (cond (presenter
+                 (done)
+                 (handler-case
+                     (objc:invoke presenter "presentViewController:animated:completion:"
+                                  controller (third entry) nil)
+                   (error (condition) (note "presenting a sheet: ~a" condition))))
+                ((plusp (decf (second entry))) (sheet-later view "listenerPresentSheet:" controller))
+                (t (note "a sheet was never presented: the way was never clear")
+                   (done))))))))
+
+(defun present-sheet (listener controller &optional (animated t))
+  "Present CONTROLLER as a sheet over LISTENER's window -- now, or as soon as
+nothing there is in the way."
+  (let ((view (listener-view listener)))
+    (when (and (live-pointer-p view) (live-pointer-p controller))
+      (cancel-sheet-dismissal controller)
+      (cancel-sheet-presentation controller)
+      (push (list (cffi:pointer-address controller) *sheet-present-tries* animated)
+            *sheet-presentations*)
+      (continue-sheet-presentation view controller)
+      t)))
+
+(defun continue-sheet-dismissal (view controller)
+  "One look at CONTROLLER: dismiss it if it can be, look again shortly if it
+may yet be, and give up when it has had its tries or was cancelled."
+  (let ((entry (sheet-entry controller *sheet-dismissals*)))
+    (when entry
+      (flet ((done () (setf *sheet-dismissals* (remove entry *sheet-dismissals*))))
+        (let ((presenter (objc:invoke controller "presentingViewController")))
+          (cond ((objc:invoke-bool controller "isBeingDismissed") (done))
+                ;; A transition in flight has a coordinator.  Not
+                ;; -isBeingPresented, which is true only inside the appearance
+                ;; callbacks and NO in the middle of the animation itself.
+                ((in-transition-p controller) (sheet-later view "listenerDismissSheet:" controller))
+                ((live-pointer-p presenter)
+                 ;; Through the presenter: sent to the sheet itself, this
+                 ;; dismisses whatever the sheet has presented instead.
+                 (objc:invoke presenter "dismissViewControllerAnimated:completion:"
+                              (third entry) nil)
+                 (done))
+                ;; Not there.  Never presented, or put off by UIKit: wait and see.
+                ((plusp (decf (second entry))) (sheet-later view "listenerDismissSheet:" controller))
+                (t (done))))))))
+
+(defun dismiss-sheet-when-settled (view controller &optional (animated t))
+  "Dismiss CONTROLLER, a sheet -- now, or as soon as it has arrived and stopped
+moving; and if it was still waiting to be presented, do not present it.  VIEW
+is a listener's view, to be called back on."
+  (when (and (live-pointer-p view) (live-pointer-p controller))
+    (cancel-sheet-dismissal controller)
+    (unless (and (cancel-sheet-presentation controller)
+                 (not (live-pointer-p (objc:invoke controller "presentingViewController"))))
+      (push (list (cffi:pointer-address controller) *sheet-dismiss-tries* animated)
+            *sheet-dismissals*)
+      (continue-sheet-dismissal view controller))
+    t))
+
+(define-listener-method ("listenerDismissSheet:" :void)
+    ((controller objc:objc-object-pointer))
+  (continue-sheet-dismissal pointer controller))
+
+(define-listener-method ("listenerPresentSheet:" :void)
+    ((controller objc:objc-object-pointer))
+  (continue-sheet-presentation pointer controller))
+
 (defun hide-restarts-panel (&optional (listener *listener*))
   "Dismiss the sheet if it is up, and forget it.  Thread 1.  Idempotent.
 
@@ -400,9 +546,7 @@ by typing its number at the prompt."
   (let ((controller (and listener (listener-restarts-panel listener))))
     (when (and controller (cffi:pointerp controller)
                (not (cffi:null-pointer-p controller)))
-      (let ((presenter (objc:invoke controller "presentingViewController")))
-        (when (and presenter (not (cffi:null-pointer-p presenter)))
-          (objc:invoke controller "dismissViewControllerAnimated:completion:" t nil)))
+      (dismiss-sheet-when-settled (listener-view listener) controller)
       (objc:release controller))
     (forget-restarts listener))
   t)

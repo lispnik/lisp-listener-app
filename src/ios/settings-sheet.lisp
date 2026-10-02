@@ -128,8 +128,9 @@ button; a switch and a stepper report a new value, not a touch."
 (defun hide-settings-sheet ()
   "Dismiss the sheet and forget it.  Idempotent."
   (when (live-pointer-p *settings-controller*)
-    (when (settings-sheet-up-p)
-      (objc:invoke *settings-controller* "dismissViewControllerAnimated:completion:" t nil))
+    (let ((listener (current-listener)))
+      (when listener
+        (dismiss-sheet-when-settled (listener-view listener) *settings-controller*)))
     (objc:release *settings-controller*))
   (setf *settings-controller* nil
         *settings-controls* '())
@@ -141,7 +142,5 @@ now, whoever set it -- init.lisp, ⌘+, or the prompt."
   (when listener
     (hide-settings-sheet)
     (setf *settings-controller* (build-settings-sheet))
-    (objc:invoke (presenting-controller listener)
-                 "presentViewController:animated:completion:"
-                 *settings-controller* t nil)
+    (present-sheet listener *settings-controller*)
     t))

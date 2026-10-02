@@ -133,14 +133,12 @@ is where it belongs and where a terminal puts it."
       (clear-paren-highlight view pointer)
       (objc:invoke storage "insertAttributedString:atIndex:" attributed at)
       (objc:release attributed)
-      ;; A printed value is a link to the value itself, where there is an
-      ;; inspector to open it in.  (Where there is not -- iOS, for now -- a
-      ;; link would only be text the toolkit repaints blue.)
+      ;; A printed value is the way to the value itself, where there is an
+      ;; inspector to open it in.  How it is marked is the front end's
+      ;; (ADD-VALUE-LINK): a click on a link on the Mac, a tap on iOS.
       (when (and (kind-value-id kind) (inspector-capabilities))
-        (objc:invoke storage "addAttribute:value:range:"
-                     (%ns-string-constant "NSLinkAttributeName")
-                     (format nil "~a~d" +value-link-prefix+ (kind-value-id kind))
-                     (cons at length)))
+        (add-value-link storage (cons at length)
+                        (format nil "~a~d" +value-link-prefix+ (kind-value-id kind))))
       (incf (view-input-start view) length)
       ;; A caret in the input region has to move with it.  NSTextView carries
       ;; a caret at the insertion point along by itself; UITextView leaves it

@@ -975,9 +975,7 @@ selected row and its field, the contributed controls, and the views."
 (defun views-sheet-rows (inspector)
   "Every view, those that apply first; each the model's plist."
   (let ((model (inspector-model inspector)))
-    (and model
-         (stable-sort (copy-list (model-all-views model))
-                      (lambda (a b) (and (getf a :applies) (not (getf b :applies))))))))
+    (and model (model-views-sorted model))))
 
 (defun views-sheet-cell (row column)
   (ecase column

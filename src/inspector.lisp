@@ -98,6 +98,10 @@
 
 (defstruct model
   (path '())                            ; the labels, root first
+  ;; The objects those labels stand for, root first: what says WHERE the
+  ;; inspector is.  The labels cannot -- they are printed afresh each time,
+  ;; and change when the object does.
+  (steps '())
   (title "")
   (panes '())
   (about '())                           ; (LABEL . STRING)
@@ -123,7 +127,10 @@
 
 (defstruct (inspector (:constructor %make-inspector))
   (id (incf *inspector-count*))
-  (path '())                            ; (LABEL . OBJECT), root first
+  ;; (LABEL . OBJECT), root first.  A LABEL of NIL means "however the object
+  ;; prints now": the root's, which would otherwise go on saying (:A :B) after
+  ;; the list had become (:A :C).
+  (path '())
   (states (make-hash-table :test 'eql))
   (model nil)                           ; thread 1's, once delivered
   (package nil)
@@ -147,7 +154,7 @@
 
 (defun make-inspector (object &optional (listener *listener*))
   (let ((inspector (%make-inspector
-                    :path (list (cons (inspector-print object 40) object))
+                    :path (list (cons nil object))
                     :package (or (and listener (listener-package listener))
                                  *package*)
                     :listener listener)))
@@ -166,8 +173,7 @@
   "Put OBJECT on the end of INSPECTOR's path."
   (hold-objc-object inspector object)
   (setf (inspector-path inspector)
-        (append (inspector-path inspector)
-                (list (cons (or label (inspector-print object 30)) object)))))
+        (append (inspector-path inspector) (list (cons label object)))))
 
 (defun inspector-object (inspector)
   "The object INSPECTOR is looking at now: the end of its path."
@@ -362,7 +368,10 @@ double colon -- or its Objective-C class."
                      (let ((view (or (nth pane views) (first views))))
                        (and view (view-name view)))))
     (make-model
-     :path (mapcar #'car (inspector-path inspector))
+     :path (loop for (label . step) in (inspector-path inspector)
+                 for root = t then nil
+                 collect (or label (inspector-print step (if root 40 30))))
+     :steps (mapcar #'cdr (inspector-path inspector))
      :title (inspector-print object 60)
      :panes (loop for name in (object-state-views state)
                   for view = (find name views :key #'view-name)
@@ -414,6 +423,16 @@ double colon -- or its Objective-C class."
                                     (or (view-package view) "?") (view-source view))))
                     views)
      :message message)))
+
+(defun same-steps-p (a b)
+  "Whether two models' STEPS are the same walk: the same objects, in order."
+  (and (= (length a) (length b)) (every #'eq a b)))
+
+(defun model-views-sorted (model)
+  "Every view there is, those that apply to the model's object first; each
+the model's plist.  For a front end's list of them."
+  (stable-sort (copy-list (model-all-views model))
+               (lambda (a b) (and (getf a :applies) (not (getf b :applies))))))
 
 ;;; The worker -----------------------------------------------------------------------
 
@@ -929,11 +948,22 @@ with OPTIONS, the view's own, by keyword.  The inspector, without a window:
 
 ;;; INSPECT --------------------------------------------------------------------------
 
+(defvar *inspected* :elsewhere
+  "Inside an evaluation at a listener's prompt: a list of the object INSPECT
+was last called on there, or NIL.  :ELSEWHERE everywhere else.
+
+ECL's INSPECT answers its argument, where SBCL's answers nothing, and a
+listener prints what a form answers: (inspect bytes) opened the inspector and
+then printed all 256 of them under the prompt.  The listener looks here and
+leaves out a value that is only the thing just inspected.")
+
 (defun inspect-object (object &optional (listener *listener*))
   "Open an inspector on OBJECT: in a window where the front end has one, and
 as text in the transcript where it has not.  Answers no values, so that what
 was inspected is not printed again under it."
   (let ((inspector (make-inspector object listener)))
+    (unless (eq *inspected* :elsewhere)
+      (setf *inspected* (list object)))
     (cond ((and *main-thread-target* (inspector-capabilities))
            (bt:with-lock-held (*inspectors-lock*)
              (push inspector *inspectors*))

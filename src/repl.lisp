@@ -61,6 +61,22 @@ SETF is sequential, so oldest first is not a stylistic choice."
         + form)
   values)
 
+(defun values-less-inspected (values)
+  "VALUES, a list -- or none, if it is the one value that INSPECT was just
+called on.  See *INSPECTED*."
+  (if (and (consp *inspected*) values (null (rest values))
+           (eq (first values) (first *inspected*)))
+      '()
+      values))
+
+(defmacro evaluate-for-values (form)
+  "The values of evaluating FORM's value, as a list, less what INSPECT was just
+called on.  A MACRO, so that EVAL is still called from the listener's own
+function: a function here was a frame between the two, and the backtrace is
+trimmed by knowing which frames are the listener's."
+  `(let ((*inspected* nil))
+     (values-less-inspected (multiple-value-list (eval ,form)))))
+
 (defun print-values (listener values)
   (let ((stream (listener-output listener)))
     (with-output-kind (stream :value)
@@ -338,8 +354,7 @@ transfers control through a restart or aborts to the top level."
                         (declare (ignore position))
                         (unless (eq form +eof+)
                           (canvas-evaluation-begins)
-                          (print-values listener
-                                        (multiple-value-list (eval form))))))))))))
+                          (print-values listener (evaluate-for-values form)))))))))))
         (setf (listener-debug-level listener) saved)
         (withdraw-restarts listener))))
     ;; THIS MUST NOT RETURN; see the docstring.  Reached only on end of input.
@@ -424,7 +439,7 @@ Errors go to the debugger hook, not to here."
        (setf (stream-column (listener-output listener)) 0)
        (setf - form)
        (canvas-evaluation-begins)
-       (let ((values (multiple-value-list (eval form))))
+       (let ((values (evaluate-for-values form)))
          (shift-values form values)
          (print-values listener values))
        t))))

@@ -66,6 +66,7 @@ The things most worth trying:
 10. Type (inspect (list 1 2 3)): a sheet comes up. Tap a row, type a form in
     the field and tap Set; try Insert, Remove and Add, and the other views
     along the top. Then (example "thermal"): move a slider, touch the picture.
+    With the keyboard up, tap a value printed in the transcript: it opens too.
 11. Tap the gear at the end of the key bar: the switches should take effect at
     once, and the stepper should resize everything in the transcript.
 12. Rotate the device. On an iPad with the canvas up, narrow the window: the
@@ -193,6 +194,7 @@ Already answered in the bundle: `ITSAppUsesNonExemptEncryption` is false.
 | 0.1.56 | touch on the canvas, the docked canvas on iPad, Open, saving a picture, twelve examples, Settings and the size of the type |
 | 0.1.58 | C-a goes to the start of the line, after the prompt |
 | 0.1.61 | (inspect x), printed as text; a thirteenth example |
-| next | the inspector as a sheet: views, options and controls, Set, Insert, Remove and Add, a readout under a finger |
+| 0.1.62 | the inspector as a sheet: views, options and controls, Set, Insert, Remove and Add, a readout under a finger |
+| next | a tap on a printed value inspects it; Views lists every view; values are no longer blue or printed twice; a sheet can no longer be left up |
 
 Everything above describes the next build. Do not paste it over an older one.

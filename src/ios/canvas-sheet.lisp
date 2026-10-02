@@ -271,6 +271,9 @@ to appear over a transition in flight, and UIKit drops such a request."
   (let ((panel (ensure-canvas-panel)))
     (unless (live-pointer-p *canvas-controller*)
       (build-canvas-sheet))
+    ;; This controller is kept and presented again, so a dismissal still
+    ;; waiting from the last time it was put away must not find it now.
+    (cancel-sheet-dismissal *canvas-controller*)
     (let ((root (objc:invoke *canvas-controller* "view")))
       (unless (same-view-p (objc:invoke panel "superview") root)
         (objc:invoke panel "removeFromSuperview")
@@ -284,10 +287,13 @@ to appear over a transition in flight, and UIKit drops such a request."
     ;; from it -- and says so with a warning or an exception, not a result.
     ;; Nothing would ask again: the drawing is done and no more redisplays are
     ;; coming.  So look, and if the sheet is not up, try again shortly.
-    (handler-case (objc:invoke (presenting-controller listener)
-                               "presentViewController:animated:completion:"
-                               *canvas-controller* nil nil)
-      (error (condition) (note "canvas: ~a" condition)))
+    ;; And only when the way is clear: SETTLED-PRESENTER is NIL while another
+    ;; sheet is arriving, leaving, or about to be told to leave.
+    (let ((presenter (settled-presenter (listener-view listener))))
+      (when presenter
+        (handler-case (objc:invoke presenter "presentViewController:animated:completion:"
+                                   *canvas-controller* nil nil)
+          (error (condition) (note "canvas: ~a" condition)))))
     (cond ((canvas-sheet-up-p)
            (setf *canvas-present-tries* 0)
            t)
@@ -356,6 +362,8 @@ out of the hierarchy there is how to get a layout that never settles."
 as a sheet where there is not.  KEYBOARD means nothing here: the keys are in
 the panel."
   (declare (ignore keyboard))
+  ;; Wanted, whatever was asked a moment ago.
+  (cancel-sheet-dismissal *canvas-controller*)
   (unless (canvas-visible-p)
     (let ((listener (current-listener)))
       (when listener
@@ -367,8 +375,11 @@ the panel."
 (defun hide-canvas ()
   "Put the canvas away.  What was drawn is kept, and drawing brings it back."
   (cond ((canvas-docked-p) (undock-canvas))
-        ((canvas-sheet-up-p)
-         (objc:invoke *canvas-controller* "dismissViewControllerAnimated:completion:" t nil)))
+        ((live-pointer-p *canvas-controller*)
+         ;; Up, or on its way up: see DISMISS-SHEET-WHEN-SETTLED.
+         (let ((listener (current-listener)))
+           (when listener
+             (dismiss-sheet-when-settled (listener-view listener) *canvas-controller*)))))
   t)
 
 (defun redisplay-canvas ()

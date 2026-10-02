@@ -385,7 +385,9 @@ NSTextView and UITextView share.
   controls as rows, the scene's drawing, native view, table and text sharing a
   stack, and at the foot the selected row's field with Open, Set, Insert,
   Remove and Add (`inspector-add-line`: one field, so a hash table's entry is
-  a key and then a value). Every control's target is the sheet's one
+  a key and then a value). **Views** in the header presents a second sheet
+  listing every view, with why each that does not apply does not; its table
+  shares the controller and is told apart by its tag. Every control's target is the sheet's one
   controller, by tag -- `uikit:on-tap` keeps its target for good, and these
   are rebuilt.
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
@@ -732,9 +734,54 @@ Each of these is a bug that actually happened here.
   (`print-values` writes each as kind `(:value id)`; `transcript-insert` adds
   the link). A text view left to itself draws a link blue and underlined: the
   Mac view's `linkTextAttributes` are set to a pointing-hand cursor and
-  nothing else, and on iOS, where a tap on a value is not wired to the
-  inspector's sheet, the attribute is not added at all. The values are KEPT so that they can be
+  nothing else. On iOS the mark is an attribute of our own
+  (`add-value-link` is the front end's): an editable UITextView does not
+  follow links and still paints them blue -- which is what every value looked
+  like in the one build that added `NSLinkAttributeName` there. A tap is a
+  `UITapGestureRecognizer` beside the text view's own, with a delegate that is
+  NOT the view (a UITextView is the delegate of its own scroll pan), and it
+  counts only if the view already had the keyboard: the tap that brings the
+  keyboard up lands anywhere. The values are KEPT so that they can be
   opened -- the last 500 a listener printed, until the transcript is cleared.
+
+- **UIKit will neither present nor dismiss during a transition, and says so
+  only in the log.** A dismissal asked for while the sheet is arriving is
+  dropped; a presentation asked for over a sheet that is leaving is put off,
+  or lands on the leaving sheet and goes with it; and
+  `-dismissViewControllerAnimated:` sent to a sheet with another on top
+  dismisses the one on top. Each left a sheet up that the program had already
+  forgotten: the Try list, opened as the restarts went, stayed for good -- on
+  the iPad to the end of the self-test, which passed regardless. Every sheet
+  now comes through `present-sheet` and goes through
+  `dismiss-sheet-when-settled` (`src/ios/restarts-sheet.lisp`): both ask
+  again every 0.15 s until the way is clear (`settled-presenter`), a
+  dismissal goes through the PRESENTER, hiding a sheet not yet presented
+  cancels the presenting, and a transition is told by
+  `-transitionCoordinator` -- NOT `-isBeingPresented`, which is true only
+  inside the appearance callbacks. The canvas's controller is kept and shown
+  again, so showing it calls `cancel-sheet-dismissal`. The self-test checks
+  that nothing is left presented after the Try list.
+
+- **A table on its way out must keep its data source.** Setting it to nil
+  "so it asks nobody" is the iPad crash again: the focus engine walks a table
+  during its dismissal, and a promised row with no cell is an assertion in
+  UITableView. It only showed once dismissals could be delayed. The
+  inspector sheet's controller outlives the sheet (the last four are held in
+  `*retired-sheet-controllers*`, because a table holds its data source
+  weakly) and answers a blank cell for a row it no longer has.
+
+- **ECL's `inspect` answers its argument.** SBCL's answers nothing. So on iOS
+  `(inspect bytes)` opened the inspector and then printed all 256 bytes under
+  the prompt. `inspect-object` notes what it was called on in `*inspected*`,
+  bound per evaluation, and `evaluate-for-values` leaves out a lone value that
+  is that object. It is a MACRO: as a function it was a frame between the
+  listener and `eval`, and the backtrace trimming failed its test.
+
+- **A path's label is printed when the model is made, not when the step is
+  taken.** The root's label was the object as it printed when the inspector
+  opened, and went on saying `(:A :B)` after the list had changed. Front ends
+  must therefore not use the labels to tell whether the inspector has moved:
+  `model-steps` and `same-steps-p` are for that.
 
 - **ECL will not quit past a thread parked in a condition wait.** The
   inspector's worker waits for jobs that way, and once `make test-ecl` had

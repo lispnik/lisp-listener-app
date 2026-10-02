@@ -235,7 +235,10 @@ window with a slider for its opacity.
 **On iOS** the inspector is a sheet with one pane: the views across the top,
 the view's options and the object's controls under them, and at the foot the
 selected row with a field and Open, Set, Insert, Remove and Add. A finger on a
-drawing is the pointer.
+drawing is the pointer, **Views** lists every view and why the ones that do
+not apply do not, and a tap on a value printed in the transcript opens the
+inspector on it (while the keyboard is up, so that the tap which raises the
+keyboard does not).
 
 ### Settings
 

@@ -258,6 +258,9 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 inspector-capabilities show-inspector refresh-inspector
                 ;; ...and say what a drawing has to say about a point on it.
                 show-inspector-readout
+                ;; Mark a printed value in the transcript as the way to its
+                ;; inspector: a link on the Mac, an attribute of our own on iOS.
+                add-value-link
                 ;; LISTENER-TEXT-VIEW's slot accessors.  The class is the front
                 ;; end's -- its superclass is NSTextView or UITextView -- and
                 ;; the transcript in the core reads and writes its slots.
