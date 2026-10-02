@@ -561,8 +561,11 @@ A step whose predicate has not held within its time fails."
          ;; Once a sheet that was dismissed has gone.
          (lambda () (not (and (canvas-docked-p) (canvas-sheet-up-p))))
          (lambda ()
-           (unless (and (replace-canvas)
-                        (eq (canvas-docks-p) (canvas-docked-p)))
+           ;; Asked for here -- unless the transcript's own layout has asked
+           ;; already, which is the real thing and what CI's iPad did first.
+           ;; Either way it must end up where the room says.
+           (replace-canvas)
+           (unless (eq (canvas-docks-p) (canvas-docked-p))
              (error "it did not move back: docks ~a, docked ~a"
                     (canvas-docks-p) (canvas-docked-p)))))
    ;; A finger on the canvas, as its recognizer reports one.

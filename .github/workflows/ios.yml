@@ -75,9 +75,14 @@ jobs:
 
       # The prefixes and the record of where they are; not the source tree or
       # the build directories, which are most of a gigabyte.
-      - name: Cache the cross-built ECL
+      #
+      # Restored here and SAVED by a step of its own, straight after the build.
+      # actions/cache saves in a post step that runs only when the job
+      # succeeds: the first run here built ECL for twenty minutes, failed one
+      # check in the self-test, and threw the twenty minutes away.
+      - name: Restore the cross-built ECL
         id: ecl-cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cache/asdf-ios-app/ecl-ios/host
@@ -96,6 +101,16 @@ jobs:
             --eval '(asdf:load-system :asdf-ios-app)' \
             --eval '(asdf-ios-app:bootstrap-ecl :platforms (list :simulator))' \
             --eval '(ext:quit 0)'
+
+      - name: Save the cross-built ECL
+        if: steps.ecl-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/asdf-ios-app/ecl-ios/host
+            ~/.cache/asdf-ios-app/ecl-ios/iphonesimulator
+            ~/.cache/asdf-ios-app/toolchain.sexp
+          key: ${{ steps.ecl-cache.outputs.cache-primary-key }}
 
       - name: Install and configure ocicl
         run: |
