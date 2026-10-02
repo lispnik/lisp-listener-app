@@ -446,6 +446,11 @@ red — "no offenders" is also what an empty scan says.
   effect when the call returns, which is the ordinary SBCL caveat.
 - There is no editor integration and no inspector. It is a Listener.
 
+## Privacy
+
+Neither application has any networking code, and nothing you type leaves your
+device. [PRIVACY.md](PRIVACY.md) says what is kept on it, and where.
+
 ## Licence
 
 MIT.
