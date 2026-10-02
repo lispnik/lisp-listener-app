@@ -25,7 +25,9 @@
   :version "0.1.0"
   :depends-on ("lisp-listener")
 
-  :bundle-identifier "org.lispnik.sbcl-macos.lisp-listener"
+  ;; The iOS app's identifier too: one application, on two platforms.  (It was
+  ;; org.lispnik.sbcl-macos.lisp-listener, after the repository's old name.)
+  :bundle-identifier "org.lispnik.lisp-listener"
   :bundle-name "Lisp Listener"
   ;; A PNG, which asdf-macos-app turns into an .icns with sips and iconutil.
   ;; res/icon.png is the alien inset in a rounded rectangle, which is what a
