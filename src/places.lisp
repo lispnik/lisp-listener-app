@@ -210,3 +210,40 @@ cannot be changed.  What a computed row of a table is."
 (defmethod place-remove ((place inspector:hash-place))
   (with-slots (table key) place
     (remhash key table)))
+
+;;; Adding to a collection -----------------------------------------------------------
+;;;
+;;; A place is somewhere a value already is.  Putting a NEW thing into a
+;;; collection is not a place's business but the collection's: a hash table
+;;; takes a key and a value, a list or a growable vector takes a value.  Two
+;;; generic functions say so, and a collection of your own can join in.
+
+(defgeneric inspector:addition (object)
+  (:documentation "What can be added to OBJECT through the inspector: NIL for
+nothing, :VALUE for an element, :KEY-AND-VALUE for an entry under a key.")
+  (:method ((object t)) nil)
+  (:method ((object hash-table)) :key-and-value)
+  ;; A proper list only: the new element goes on the END, destructively, so
+  ;; that the list being inspected is still the list.  Pushing onto the front
+  ;; would make a new list and leave this one as it was.
+  (:method ((object cons))
+    (and (ignore-errors (list-length object)) (null (cdr (last object))) :value))
+  (:method ((object vector))
+    (and (array-has-fill-pointer-p object) (adjustable-array-p object) :value)))
+
+(defgeneric inspector:add (object value &optional key)
+  (:documentation "Add VALUE to OBJECT -- under KEY, where its ADDITION is
+:KEY-AND-VALUE.")
+  (:method ((object hash-table) value &optional key)
+    (setf (gethash key object) value))
+  (:method ((object cons) value &optional key)
+    (declare (ignore key))
+    (setf (cdr (last object)) (list value))
+    value)
+  (:method ((object vector) value &optional key)
+    (declare (ignore key))
+    (unless (typep value (array-element-type object))
+      (error "~a is not something this vector can hold."
+             (let ((*print-length* 4) (*print-level* 2)) (prin1-to-string value))))
+    (vector-push-extend value object)
+    value))

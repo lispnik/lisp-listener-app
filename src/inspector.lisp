@@ -60,9 +60,11 @@
   (header-p nil)
   (cells '())                           ; strings
   (places '())                          ; a place or NIL, per cell
-  ;; Whether the row's place may be set: asked on the worker, with the rest,
-  ;; so that thread 1 need call nobody's method to know.
-  (editable nil))
+  ;; Per cell, whether its place may be set, and whether it may be removed:
+  ;; asked on the worker, with the rest, so that thread 1 need call nobody's
+  ;; method to know.
+  (editable '())
+  (removable '()))
 
 (defstruct table-model
   (columns '())
@@ -95,6 +97,8 @@
   (about '())                           ; (LABEL . STRING)
   (controls '())
   (views '())                           ; (TITLE . CONTRIBUTOR)
+  ;; What can be added to the object: NIL, :VALUE or :KEY-AND-VALUE.
+  (addition nil)
   (message nil))
 
 ;;; The session ----------------------------------------------------------------------
@@ -197,12 +201,16 @@ tables and headings as the segments of one table, and its text."
                                           "#<unbound>")
                                       cells)
                                 (push place places)))))
-                     (let ((row (make-row :cells (nreverse cells)
-                                          :places (nreverse places))))
-                       (setf (row-editable row)
-                             (let ((place (row-place row)))
-                               (and place (inspector:place-supports-p place :set) t)))
-                       row))
+                     (let ((places (nreverse places)))
+                       (flet ((supports (operation)
+                                (mapcar (lambda (place)
+                                          (and place
+                                               (inspector:place-supports-p place operation)
+                                               t))
+                                        places)))
+                         (make-row :cells (nreverse cells) :places places
+                                   :editable (supports :set)
+                                   :removable (supports :remove)))))
                  (error (condition)
                    (make-row :cells (list "" (format nil "#<error: ~a>"
                                                      (report-condition condition))))))))
@@ -304,6 +312,7 @@ already there are only ever added to."
                                                               place :set)
                                                              t))
                                            :control control)))
+     :addition (ignore-errors (inspector:addition object))
      :views (mapcar (lambda (view)
                       (cons (view-title view)
                             (format nil "~(~a~)~@[ · ~a~]"
@@ -407,15 +416,33 @@ NOTE-CHANGED every step -- it is computed once."
          (pane-model (and model (nth pane (model-panes model)))))
     (and pane-model (table-row (pane-model-table pane-model) index))))
 
-(defun row-place (row)
-  "The place a row is about: its last, which is its value in the usual row of
-a name and a value."
-  (and row (find-if-not #'null (row-places row) :from-end t)))
+(defun row-cell (row &optional column)
+  "Which cell of ROW is meant: COLUMN, if that cell is a place, and otherwise
+the row's last place -- its value, in the usual row of a name and a value.
+NIL when the row has no place at all."
+  (and row
+       (if (and column (nth column (row-places row)))
+           column
+           (position-if-not #'null (row-places row) :from-end t))))
 
-(defun inspector-open-row (inspector pane index)
-  "Walk into row INDEX of PANE: the inspector now looks at that row's value."
+(defun row-place (row &optional column)
+  "The place ROW is about, or the one in its cell COLUMN."
+  (let ((cell (row-cell row column)))
+    (and cell (nth cell (row-places row)))))
+
+(defun row-editable-p (row &optional column)
+  (let ((cell (row-cell row column)))
+    (and cell (nth cell (row-editable row)))))
+
+(defun row-removable-p (row &optional column)
+  (let ((cell (row-cell row column)))
+    (and cell (nth cell (row-removable row)))))
+
+(defun inspector-open-row (inspector pane index &optional column)
+  "Walk into row INDEX of PANE -- into its cell COLUMN, if that is given and is
+a place: the inspector now looks at that value."
   (let* ((row (inspector-pane-row inspector pane index))
-         (place (row-place row)))
+         (place (row-place row column)))
     (when place
       (inspector-update
        inspector
@@ -456,15 +483,47 @@ a name and a value."
       (error "~a is not something this can hold." (inspector-print value 60)))
     (setf (inspector:place-value place) value)))
 
-(defun inspector-edit-row (inspector pane index text)
-  "Put the value of TEXT -- a form, read and evaluated -- at row INDEX of PANE."
-  (let ((place (row-place (inspector-pane-row inspector pane index))))
+(defun inspector-edit-row (inspector pane index text &optional column)
+  "Put the value of TEXT -- a form, read and evaluated -- at row INDEX of PANE,
+in its cell COLUMN if that is given."
+  (let ((place (row-place (inspector-pane-row inspector pane index) column)))
     (when place
       (inspector-update
        inspector
        (lambda ()
          (set-place-from-text place text)
          (note-changed-elsewhere inspector))))))
+
+(defun inspector-remove-row (inspector pane index &optional column)
+  "Take away what is at row INDEX of PANE: unbind the slot, drop the key."
+  (let ((place (row-place (inspector-pane-row inspector pane index) column)))
+    (when place
+      (inspector-update
+       inspector
+       (lambda ()
+         (unless (inspector:place-supports-p place :remove)
+           (error "This cannot be removed."))
+         (place-remove place)
+         (note-changed-elsewhere inspector))))))
+
+(defun inspector-add (inspector value-text &optional key-text)
+  "Add to the object INSPECTOR is looking at: the value of VALUE-TEXT, a form,
+under the value of KEY-TEXT where the object wants a key."
+  (inspector-update
+   inspector
+   (lambda ()
+     (let* ((object (inspector-object inspector))
+            (kind (inspector:addition object)))
+       (unless kind
+         (error "Nothing can be added to this."))
+       (flet ((evaluate (text what)
+                (when (zerop (length (string-trim " " (or text ""))))
+                  (error "There is no ~a to add." what))
+                (eval (read-from-string text))))
+         (if (eq kind :key-and-value)
+             (inspector:add object (evaluate value-text "value") (evaluate key-text "key"))
+             (inspector:add object (evaluate value-text "value"))))
+       (note-changed-elsewhere inspector)))))
 
 (defun inspector-set-control (inspector index &optional value)
   "Work the control at INDEX in the model: set its place to VALUE, or press it."

@@ -166,7 +166,10 @@ floats as a heat map beside a surface, an instance as its slots. A double click
 on a row walks into that value, and the path across the top leads back.
 Select a row and the panel on the right has a field to change it — a form,
 evaluated — which the place refuses if it cannot hold the result: a byte
-vector will not take 999.
+vector will not take 999. In a grid the cell changed is the one clicked.
+**Remove** unbinds a slot or drops a hash table's key, and where the object can
+be added to there are fields for it: a key and a value for a hash table, a
+value for a list or a vector that can grow.
 
 **Anyone can contribute a view.** A view is matched by a type and, if that is
 not enough, a predicate; it is given the object and answers a *scene* — a

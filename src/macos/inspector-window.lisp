@@ -172,16 +172,21 @@ each stretch of the table that is scrolled to."
 
 (define-pane-method ("tableViewSelectionDidChange:" :void)
     ((notification objc:objc-object-pointer))
+  ;; The row, and the COLUMN that was clicked: in a grid every cell is a place,
+  ;; and the one meant is the one under the mouse.  A selection made from the
+  ;; keyboard has no clicked column, and means the row's own place.
   (let ((table (getf (inspector-pane-parts inspector pane) :table)))
     (setf (inspector-part inspector :selection)
-          (let ((index (objc:invoke table "selectedRow")))
-            (and (>= index 0) (cons pane index))))
+          (let ((index (objc:invoke table "selectedRow"))
+                (column (objc:invoke table "clickedColumn")))
+            (and (>= index 0) (list pane index (and (>= column 0) column)))))
     (show-inspector-selection inspector)))
 
 (define-pane-method ("paneOpenRow:" :void) ((sender objc:objc-object-pointer))
-  (let ((index (objc:invoke sender "clickedRow")))
+  (let ((index (objc:invoke sender "clickedRow"))
+        (column (objc:invoke sender "clickedColumn")))
     (when (>= index 0)
-      (inspector-open-row inspector pane index))))
+      (inspector-open-row inspector pane index (and (>= column 0) column)))))
 
 (define-pane-method ("paneView:" :void) ((sender objc:objc-object-pointer))
   (let ((choice (nth (objc:invoke sender "indexOfSelectedItem")
@@ -236,8 +241,29 @@ each stretch of the table that is scrolled to."
 (define-inspector-method ("inspectorEdit:" :void) ((sender objc:objc-object-pointer))
   (let ((selection (inspector-part inspector :selection)))
     (when selection
-      (inspector-edit-row inspector (car selection) (cdr selection)
-                          (objc:ns-string-to-string (objc:invoke sender "stringValue"))))))
+      (destructuring-bind (pane index column) selection
+        (inspector-edit-row inspector pane index
+                            (objc:ns-string-to-string (objc:invoke sender "stringValue"))
+                            column)))))
+
+(define-inspector-method ("inspectorRemove:" :void) ((sender objc:objc-object-pointer))
+  (let ((selection (inspector-part inspector :selection)))
+    (when selection
+      (destructuring-bind (pane index column) selection
+        (inspector-remove-row inspector pane index column)))))
+
+(define-inspector-method ("inspectorAdd:" :void) ((sender objc:objc-object-pointer))
+  (let ((key (inspector-part inspector :add-key))
+        (value (inspector-part inspector :add-value)))
+    (when (live-pointer-p value)
+      (inspector-add inspector
+                     (objc:ns-string-to-string (objc:invoke value "stringValue"))
+                     (and (live-pointer-p key)
+                          (objc:ns-string-to-string (objc:invoke key "stringValue"))))
+      ;; Emptied for the next one: adding is something done several times over.
+      (objc:invoke value "setStringValue:" "")
+      (when (live-pointer-p key)
+        (objc:invoke key "setStringValue:" "")))))
 
 (define-inspector-method ("windowWillClose:" :void) ((notification objc:objc-object-pointer))
   (let ((window (inspector-part inspector :window)))
@@ -294,6 +320,8 @@ each stretch of the table that is scrolled to."
     (objc:invoke table "setRowHeight:" *inspector-row-height*)
     (objc:invoke table "setUsesAlternatingRowBackgroundColors:" t)
     (objc:invoke table "setAllowsMultipleSelection:" nil)
+    ;; A column's position is the cell it shows, which the selection relies on.
+    (objc:invoke table "setAllowsColumnReordering:" nil)
     (objc:invoke table "setColumnAutoresizingStyle:" 4) ; the last column takes the slack
     (objc:invoke table "setDataSource:" controller)
     (objc:invoke table "setDelegate:" controller)
@@ -646,20 +674,32 @@ Answers the view that holds its value, and how much height it took."
 or say that it cannot be."
   (let* ((field (inspector-part inspector :editor))
          (caption (inspector-part inspector :editor-caption))
+         (remove (inspector-part inspector :remove-button))
          (selection (inspector-part inspector :selection))
-         (row (and selection (inspector-pane-row inspector (car selection) (cdr selection)))))
+         (row (and selection (inspector-pane-row inspector (first selection)
+                                                 (second selection))))
+         (column (third selection))
+         (cell (row-cell row column)))
     (when (live-pointer-p field)
-      (cond ((and row (row-place row))
-             (objc:invoke caption "setStringValue:"
-                          (format nil "~a~:[ (read-only)~;~]"
-                                  (clip-string (or (first (row-cells row)) "") 30)
-                                  (row-editable row)))
-             (objc:invoke field "setStringValue:" (or (first (last (row-cells row))) ""))
-             (objc:invoke field "setEnabled:" (and (row-editable row) t)))
+      (cond (cell
+             (let ((place (nth cell (row-places row))))
+               (objc:invoke caption "setStringValue:"
+                            (format nil "~a~:[ (read-only)~;~]"
+                                    (clip-string (or (inspector:place-label place)
+                                                     (first (row-cells row))
+                                                     "")
+                                                 30)
+                                    (row-editable-p row column))))
+             (objc:invoke field "setStringValue:" (or (nth cell (row-cells row)) ""))
+             (objc:invoke field "setEnabled:" (and (row-editable-p row column) t))
+             (when (live-pointer-p remove)
+               (objc:invoke remove "setEnabled:" (and (row-removable-p row column) t))))
             (t
              (objc:invoke caption "setStringValue:" "No row selected")
              (objc:invoke field "setStringValue:" "")
-             (objc:invoke field "setEnabled:" nil))))))
+             (objc:invoke field "setEnabled:" nil)
+             (when (live-pointer-p remove)
+               (objc:invoke remove "setEnabled:" nil)))))))
 
 (defun refresh-inspector-panel (inspector)
   "The object panel, laid out downwards from its top: what the object is, the
@@ -679,7 +719,8 @@ selected row and its field, the contributed controls, and the views."
       ;; not made again, because one of them may be in the middle of a drag.
       ((and (equal signature (inspector-part inspector :control-signature))
             (equal (model-about model) (inspector-part inspector :about-shown))
-            (equal (model-views model) (inspector-part inspector :views-shown)))
+            (equal (model-views model) (inspector-part inspector :views-shown))
+            (eq (model-addition model) (inspector-part inspector :addition-shown)))
        (loop for view in (inspector-part inspector :control-views)
              for control in (model-controls model)
              do (set-control-view view control)))
@@ -700,15 +741,62 @@ selected row and its field, the contributed controls, and the views."
            (objc:invoke panel "addSubview:" caption)
            (setf (inspector-part inspector :editor-caption) caption))
          (decf y 24d0)
-         (let ((field (objc:invoke "NSTextField" "textFieldWithString:" "")))
-           (objc:invoke field "setFrame:" (vector x y width 21d0))
+         ;; The field that changes the selected row, and beside it the button
+         ;; that takes the row away, where a row can be: a slot unbound, a key
+         ;; dropped.
+         (let ((field (objc:invoke "NSTextField" "textFieldWithString:" ""))
+               (remove (objc:invoke "NSButton" "buttonWithTitle:target:action:"
+                                    "Remove" target
+                                    (objc:coerce-to-selector "inspectorRemove:"))))
+           (objc:invoke field "setFrame:" (vector x y (- width 76d0) 21d0))
            (objc:invoke field "setFont:" (inspector-mono-font))
            (objc:invoke field "setTarget:" target)
            (objc:invoke field "setAction:" (objc:coerce-to-selector "inspectorEdit:"))
            (objc:invoke field "setAutoresizingMask:" +ns-view-min-y-margin+)
            (objc:invoke field "setEnabled:" nil)
            (objc:invoke panel "addSubview:" field)
-           (setf (inspector-part inspector :editor) field))
+           (objc:invoke remove "setFrame:" (vector (+ x (- width 72d0)) (- y 4d0) 76d0 28d0))
+           (objc:invoke remove "setFont:" (inspector-font))
+           (objc:invoke remove "setAutoresizingMask:" +ns-view-min-y-margin+)
+           (objc:invoke remove "setEnabled:" nil)
+           (objc:invoke panel "addSubview:" remove)
+           (setf (inspector-part inspector :editor) field
+                 (inspector-part inspector :remove-button) remove))
+         ;; Adding, where the object is something that can be added to: a key
+         ;; and a value for a hash table, a value for a list or a vector that
+         ;; grows.  Each field takes a form.
+         (setf (inspector-part inspector :add-key) nil
+               (inspector-part inspector :add-value) nil)
+         (when (model-addition model)
+           (gap)
+           (label (if (eq (model-addition model) :key-and-value)
+                      "Add an entry"
+                      "Add an element")
+                  :bold t)
+           (flet ((add-field (placeholder key)
+                    (decf y 26d0)
+                    (let ((field (objc:invoke "NSTextField" "textFieldWithString:" "")))
+                      (objc:invoke field "setFrame:" (vector x y (- width 76d0) 21d0))
+                      (objc:invoke field "setFont:" (inspector-mono-font))
+                      (objc:invoke field "setPlaceholderString:" placeholder)
+                      (objc:invoke field "setAutoresizingMask:" +ns-view-min-y-margin+)
+                      (objc:invoke panel "addSubview:" field)
+                      (setf (inspector-part inspector key) field)
+                      field)))
+             (when (eq (model-addition model) :key-and-value)
+               (add-field "key" :add-key))
+             (let ((value (add-field "value" :add-value))
+                   (button (objc:invoke "NSButton" "buttonWithTitle:target:action:"
+                                        "Add" target
+                                        (objc:coerce-to-selector "inspectorAdd:"))))
+               ;; Return in the value field adds, as the button does.
+               (objc:invoke value "setTarget:" target)
+               (objc:invoke value "setAction:" (objc:coerce-to-selector "inspectorAdd:"))
+               (objc:invoke button "setFrame:" (vector (+ x (- width 72d0)) (- y 4d0) 76d0 28d0))
+               (objc:invoke button "setFont:" (inspector-font))
+               (objc:invoke button "setAutoresizingMask:" +ns-view-min-y-margin+)
+               (objc:invoke panel "addSubview:" button)
+               (setf (inspector-part inspector :add-button) button))))
          (gap)
          (let ((views '()) (group nil))
            (loop for control in (model-controls model)
@@ -735,7 +823,8 @@ selected row and its field, the contributed controls, and the views."
                do (label (format nil "~a  —  ~a" title contributor) :secondary t)))
        (setf (inspector-part inspector :control-signature) signature
              (inspector-part inspector :about-shown) (model-about model)
-             (inspector-part inspector :views-shown) (model-views model))))
+             (inspector-part inspector :views-shown) (model-views model)
+             (inspector-part inspector :addition-shown) (model-addition model))))
     (show-inspector-selection inspector)))
 
 ;;; The window -----------------------------------------------------------------------

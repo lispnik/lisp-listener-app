@@ -87,6 +87,8 @@
    #:place #:place-value #:place-label #:place-bound-p
    #:place-supports-p #:place-accepts-p
    #:slot-place #:element-place #:aref-place #:hash-place #:value
+   ;; Adding to a collection: what kind of addition it takes, and making one.
+   #:addition #:add
    ;; Scenes: what a view answers.
    #:table #:text #:stack #:section #:drawing
    ;; Controls: what DEFINE-CONTROLS answers.

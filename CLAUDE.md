@@ -253,7 +253,11 @@ NSTextView and UITextView share.
   - `src/places.lisp` — a `place` is where a value is: it answers its value,
     whether it has one, what may be done to it (`:set`, `:remove`) and whether
     a given value is acceptable. Clouseau's idea; it is what makes an edit a
-    property of the row and not of the table.
+    property of the row and not of the table. Adding a NEW thing is the
+    collection's business, not a place's: `inspector:addition` says what an
+    object takes (`:value`, `:key-and-value`) and `inspector:add` does it --
+    a list is added to at its END, destructively, so that it stays the list
+    being inspected.
   - `src/views.lisp` — `inspector:define-view` registers a view by type, an
     optional `:when` predicate and a priority; `applicable-views` sorts by
     priority, then the more specific type. **A view draws nothing**: it
@@ -329,8 +333,10 @@ NSTextView and UITextView share.
   panes (a pop-up of views, a row of controls made from the view's options,
   and a drawing, a cell-based table and text sharing the room), and the object
   panel (what it is, the selected row and a field to change it, the
-  contributed controls, the views and who contributed each). It shows the
-  model and evaluates nothing; every action is a request whose answer is a
+  contributed controls, the views and who contributed each). The selection is
+  a row AND the column clicked (`-clickedColumn`), since in a grid every cell
+  is a place; a row's cells carry their own editable and removable flags,
+  computed on the worker. It shows the model and evaluates nothing; every action is a request whose answer is a
   new model. The drawing is painted by `paint-shapes`, the canvas's painter.
   Controls are told new values rather than rebuilt while their set is
   unchanged -- a slider rebuilt mid-drag is a slider let go of.
