@@ -138,12 +138,12 @@ order is load-bearing**:
 - `lisp-listener/core` — `src/`: `package impl main-thread queue listener history
   sexp paredit keymap indent transcript completion paren-highlight paredit-view
   history-search streams config restarts preferences files canvas places views
-  inspector standard-views examples repl`. No toolkit; SBCL and ECL.
+  inspector standard-views objc-views examples repl`. No toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
   history-panel canvas-window preferences-window inspector-window screenshot
-  debugger-test demo app`. The name it always had.
+  objc-views debugger-test demo app`. The name it always had.
 - `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet
-  history-sheet canvas-sheet settings-sheet app`.
+  history-sheet canvas-sheet settings-sheet inspector-sheet objc-views app`.
 
 `tools/compile-check.lisp` and `tools/headless-test.lisp` each carry the same
 lists by hand; a new file has to be added in all three places. The core also
@@ -158,8 +158,9 @@ define: `transcript-color`, `transcript-font`, `main-thread-run-loop-modes`,
 `show-restarts-panel`, `hide-restarts-panel`, `restarts-panel-visible-p`,
 `current-listener`, the canvas's five (`canvas-toolkit`, `show-canvas`,
 `hide-canvas`, `canvas-visible-p`, `redisplay-canvas`, and `save-canvas-png`
-and `documents-directory` for `(save …)`), the inspector's three
-(`inspector-capabilities`, `show-inspector`, `refresh-inspector`), and the class
+and `documents-directory` for `(save …)`), the inspector's four
+(`inspector-capabilities`, `show-inspector`, `refresh-inspector`,
+`show-inspector-readout`), and the class
 `listener-text-view`, with the same slots on
 both. The core only ever touches that class through `-textStorage`,
 `-selectedRange`, `-scrollRangeToVisible:` and `-typingAttributes`, which
@@ -247,7 +248,7 @@ NSTextView and UITextView share.
   (`canvas-pointer-event`) and a press is also the key `:click`. `(save
   "x.svg")` writes the display list out, all here; `(save "x.png")` is the
   front end's `save-canvas-png`, on thread 1, waited for.
-- **The inspector**, four files, all toolkit-free. The names a contributor
+- **The inspector**, five files, all toolkit-free. The names a contributor
   types are a third package, `INSPECTOR`, defined from inside `LISP-LISTENER`
   as `CANVAS` is, and **not** imported into `CL-USER` (`text` is the canvas's).
   - `src/places.lisp` — a `place` is where a value is: it answers its value,
@@ -257,7 +258,14 @@ NSTextView and UITextView share.
     collection's business, not a place's: `inspector:addition` says what an
     object takes (`:value`, `:key-and-value`) and `inspector:add` does it --
     a list is added to at its END, destructively, so that it stays the list
-    being inspected.
+    being inspected. Taking one out or putting one in the MIDDLE is a place's
+    (`place-remove`, `place-insert`, `:remove` and `:insert`): a vector that
+    can grow, and a list through `list-element-place`, which works on the
+    conses in place -- removing the first element copies the second cons into
+    the first, so the list is the same object afterwards, and that is why the
+    ONLY element of a list cannot be removed. `inspector:objc` wraps a foreign
+    pointer somebody vouches for as an Objective-C object (`objc-object`);
+    nothing ever sends a message to a bare pointer.
   - `src/views.lisp` — `inspector:define-view` registers a view by type, an
     optional `:when` predicate and a priority; `applicable-views` sorts by
     priority, then the more specific type. **A view draws nothing**: it
@@ -265,7 +273,16 @@ NSTextView and UITextView share.
     data. A `drawing`'s body calls the canvas's functions with
     `*canvas-frame*` bound, so they collect into a list. Options are declared
     data, the view's own; `define-controls` contributes controls bound to
-    places, which belong to the object.
+    places, which belong to the object. A drawing may carry a `:readout`, a
+    function of a point answering what to say about it. `:objc-class "NSImage"`
+    matches by `-isKindOfClass:` instead of a type; `:requires (:appkit)`
+    keeps a view from applying where the front end lacks that capability;
+    `inspector:native` is a scene that is a function answering a toolkit view,
+    with a fallback scene for text and for the other platform.
+    `view-applicability` answers why a view does NOT apply, which is what the
+    Mac's All Views sheet shows. The time limit lives here too
+    (`with-time-limit`, `*inspector-time-limit*`), because `view-scene` is its
+    first user.
   - `src/inspector.lisp` — the session (object, path, two panes, per-object
     state) and the **worker thread**: a view is somebody's code, thread 1
     never evaluates, and the listener thread is busy, so scenes are computed
@@ -273,9 +290,25 @@ NSTextView and UITextView share.
     strings and shapes. With no `*main-thread-target*` a job runs where it is
     asked for, which is the seam `make test` uses. `(inspect x)` is redirected
     through `with-inspect-hook` (`impl.lisp`), and prints the model as text
-    where `inspector-capabilities` is empty -- iOS, for now.
+    where `inspector-capabilities` is empty -- the stubs, with no main thread.
+    A **watchdog** thread interrupts the worker when a view, a row or a
+    control's action has run past the limit; the interrupt carries a token, so
+    one sent for a piece of work that has just finished cannot land on the
+    next. An **Objective-C object** is computed on thread 1 instead
+    (`call-in-object-thread`, waited for) and is not timed: thread 1 is not
+    for interrupting. The inspector retains every such object it walks into
+    and releases them when it closes. `readout-shapes` makes a readout's
+    crosshair and label out of the canvas's own shapes, so both painters draw
+    it. `stop-inspector-worker` ends the worker by a `:stop` job, never an
+    interrupt -- see "Interrupt needs two mechanisms".
   - `src/standard-views.lisp` — the views that ship, written with
-    `define-view` and nothing else.
+    `define-view` and nothing else. Disassembly applies only where
+    `function-disassembly` (`impl.lisp`) answers: ECL's would run a C compiler.
+  - `src/objc-views.lisp` — Foundation's objects: any object, `NSArray`,
+    `NSDictionary`, `NSString`. What comes out of a collection is wrapped on
+    the way, so it can be walked into. The toolkit's own are
+    `src/macos/objc-views.lisp` (an image, a view's and a window's picture,
+    a window's opacity and title) and `src/ios/objc-views.lisp` (a `UIImage`).
 - `src/examples.lisp` — `(examples)`, `(example "snake")`,
   `(example-source "snake")`, and `(example-edit "snake")`, which puts the
   source at the prompt. The twelve programs are `examples/*.lisp`, **read
@@ -339,7 +372,22 @@ NSTextView and UITextView share.
   computed on the worker. It shows the model and evaluates nothing; every action is a request whose answer is a
   new model. The drawing is painted by `paint-shapes`, the canvas's painter.
   Controls are told new values rather than rebuilt while their set is
-  unchanged -- a slider rebuilt mid-drag is a slider let go of.
+  unchanged -- a slider rebuilt mid-drag is a slider let go of. The drawing
+  has a tracking area: `-mouseMoved:` asks the worker for a readout and
+  `show-inspector-readout` paints it, unless the pointer has left meanwhile.
+  A native scene's view is made by its function on each refresh and put in the
+  pane's `:native-host`. **All Views…** is a sheet on the inspector's window
+  whose table's data source is the window's controller: every view, greyed
+  with its reason where it does not apply, and Show in Left/Right Pane.
+- `src/ios/inspector-sheet.lisp` — the inspector on iOS: a sheet at full
+  height, ONE pane and one inspector at a time (a second `(inspect x)` takes
+  the sheet over). A segmented control of views, the options and contributed
+  controls as rows, the scene's drawing, native view, table and text sharing a
+  stack, and at the foot the selected row's field with Open, Set, Insert,
+  Remove and Add (`inspector-add-line`: one field, so a hash table's entry is
+  a key and then a value). Every control's target is the sheet's one
+  controller, by tag -- `uikit:on-tap` keeps its target for good, and these
+  are rebuilt.
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
   produces `doc/screenshots/`, on a CI runner, on every push.
 - `src/macos/demo.lisp` — `LISP_LISTENER_DEMO=<dir>` plays a scripted session a
@@ -357,7 +405,10 @@ NSTextView and UITextView share.
   File ▸ Open…, a dropped file and Save Transcript…, the Examples menu and the
   canvas (its keys, its mouse, saving it), Settings and the View menu, the
   remembered windows, and the inspector (its window, options, navigation, an
-  edit, contributed controls, and each of the four ways of opening one).
+  edit, contributed controls, each of the four ways of opening one, a readout,
+  the All Views sheet, Insert and Remove in a list, and Objective-C objects:
+  a pointer vouched for, an `NSArray` walked into, a window's picture and its
+  opacity slider).
   Exits 0 only if every check held; `macos.yml` runs it on
   both architectures. **Everything in the pane is AppKit, so the headless test
   reaches none of it**; every bug in the pane's first versions was found by
@@ -681,9 +732,22 @@ Each of these is a bug that actually happened here.
   (`print-values` writes each as kind `(:value id)`; `transcript-insert` adds
   the link). A text view left to itself draws a link blue and underlined: the
   Mac view's `linkTextAttributes` are set to a pointing-hand cursor and
-  nothing else, and on iOS, where there is no inspector to open, the
-  attribute is not added at all. The values are KEPT so that they can be
+  nothing else, and on iOS, where a tap on a value is not wired to the
+  inspector's sheet, the attribute is not added at all. The values are KEPT so that they can be
   opened -- the last 500 a listener printed, until the transcript is cleared.
+
+- **ECL will not quit past a thread parked in a condition wait.** The
+  inspector's worker waits for jobs that way, and once `make test-ecl` had
+  started one, the test printed its verdict and then never exited. The worker
+  is ended by a job it takes, `:stop`, and the headless test asks for that
+  before it leaves.
+
+- **A stack view has to be told which arranged view takes the slack.** The iOS
+  inspector's content -- a drawing, a table -- had the default hugging
+  priority like everything else in the sheet, and with a scene that wanted no
+  height of its own (a picture) UIKit stretched the header instead: the title
+  sat in the middle of the sheet over a star twenty points across. The content
+  stack's vertical hugging priority is 1, and a native view's own are too.
 
 - **UIKit presents only from the top of the stack.** Asked to present from a
   controller that is already presenting, it logs a warning and does nothing: an

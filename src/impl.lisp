@@ -163,6 +163,16 @@ Standard classes and structure classes alike, on both."
    #+ecl (progn (unless (clos:class-finalized-p class) (clos:finalize-inheritance class))
                 (mapcar #'class-name (clos:class-precedence-list class)))))
 
+(defun function-disassembly (function)
+  "What the compiler made of FUNCTION, as text, or NIL where that cannot be
+asked.  ECL's DISASSEMBLE of a compiled function runs the C compiler, which a
+phone has not got; only SBCL answers."
+  #+sbcl (ignore-errors
+          (string-trim '(#\Newline #\Space)
+                       (with-output-to-string (*standard-output*)
+                         (disassemble function))))
+  #+ecl (progn function nil))
+
 (defun function-arglist (function)
   "FUNCTION's lambda list and whether it is known, as two values."
   (handler-case
@@ -246,6 +256,8 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 ;; front end can put on screen -- none means INSPECT prints --
                 ;; put an inspector's window up; and show its new model.
                 inspector-capabilities show-inspector refresh-inspector
+                ;; ...and say what a drawing has to say about a point on it.
+                show-inspector-readout
                 ;; LISTENER-TEXT-VIEW's slot accessors.  The class is the front
                 ;; end's -- its superclass is NSTextView or UITextView -- and
                 ;; the transcript in the core reads and writes its slots.

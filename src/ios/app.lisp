@@ -69,12 +69,6 @@ target the listener thread hops to, and only then the thread."
   "The one listener there is."
   (or *listener* (first *listeners*)))
 
-;;; The inspector has no window here yet, and says so by having no
-;;; capabilities: (inspect x) then prints what a window would have shown.  See
-;;; src/inspector.lisp.
-(defun inspector-capabilities () '())
-(defun show-inspector (inspector) (declare (ignore inspector)) nil)
-(defun refresh-inspector (inspector) (declare (ignore inspector)) nil)
 
 ;;; A file from Files -----------------------------------------------------------
 ;;;
@@ -718,15 +712,148 @@ A step whose predicate has not held within its time fails."
              (unless *paredit-enabled* (error "paredit is still off"))
              (hide-settings-sheet))))
    (list "Settings is put away" (lambda () (not (settings-sheet-up-p))) nil)
-   ;; The inspector has no window here yet, so INSPECT prints what one would
-   ;; show: the best view of the thing, and the names of the others.
-   (list "(inspect x) prints, where there is no inspector window yet"
-         (lambda () (at-top-level-prompt-p listener))
+   ;; The inspector, as a sheet: a list's elements, changed from its foot.
+   (list "(inspect x) at the prompt" (lambda () (at-top-level-prompt-p listener))
          (lambda () (type-line listener "(inspect (list :alpha :beta))")))
-   (list "the object in its best view, and the other views by name"
-         (lambda () (and (at-top-level-prompt-p listener)
-                         (search "Other views: Object, Describe." (self-test-text listener))
-                         (search ":BETA" (self-test-text listener))))
+   (list "puts the inspector's sheet up, on the list's elements"
+         (lambda () (and (inspector-sheet-up-p) (inspector-model *inspector-shown*)))
+         (lambda ()
+           (let ((inspector *inspector-shown*))
+             (unless (equal "Elements" (pane-model-view-title (sheet-pane-model inspector)))
+               (error "it opened on ~a" (pane-model-view-title (sheet-pane-model inspector))))
+             (unless (= 2 (objc:invoke (inspector-part inspector :table)
+                                       "numberOfRowsInSection:" 0))
+               (error "the table has ~d rows"
+                      (objc:invoke (inspector-part inspector :table)
+                                   "numberOfRowsInSection:" 0)))
+             (select-inspector-row 1)
+             (unless (equal ":BETA" (sheet-field-text inspector))
+               (error "the field has ~s" (sheet-field-text inspector)))
+             (objc:invoke (inspector-part inspector :field) "setText:" "(+ 40 2)")
+             (unless (press-inspector-button :set)
+               (error "Set could not be pressed")))))
+   (list "Set puts a form's value at the selected row"
+         (lambda () (equal (inspector-object *inspector-shown*) '(:alpha 42)))
+         (lambda ()
+           (objc:invoke (inspector-part *inspector-shown* :field) "setText:" ":new")
+           (unless (press-inspector-button :insert)
+             (error "Insert could not be pressed"))))
+   (list "Insert puts one in before it"
+         (lambda () (equal (inspector-object *inspector-shown*) '(:alpha :new 42)))
+         (lambda ()
+           (objc:invoke (inspector-part *inspector-shown* :field) "setText:" "(list 1 2)")
+           (unless (press-inspector-button :add)
+             (error "Add could not be pressed"))))
+   (list "Add puts one on the end"
+         (lambda () (equal (inspector-object *inspector-shown*) '(:alpha :new 42 (1 2))))
+         (lambda ()
+           (select-inspector-row 0)
+           (unless (press-inspector-button :remove)
+             (error "Remove could not be pressed"))))
+   (list "Remove takes one out"
+         (lambda () (equal (inspector-object *inspector-shown*) '(:new 42 (1 2))))
+         (lambda ()
+           (select-inspector-row 2)
+           (unless (press-inspector-button :open)
+             (error "Open could not be pressed"))))
+   (list :hold nil nil)
+   (list "Open walks into a row"
+         (lambda () (and (equal (inspector-object *inspector-shown*) '(1 2))
+                         (= 2 (length (model-path (inspector-model *inspector-shown*))))))
+         (lambda ()
+           (unless (press-inspector-button :back)
+             (error "Back could not be pressed"))))
+   (list "and Back walks out"
+         (lambda () (= 1 (length (model-path (inspector-model *inspector-shown*)))))
+         (lambda ()
+           ;; Another view, through the segmented control.
+           (let* ((inspector *inspector-shown*)
+                  (views (inspector-part inspector :views))
+                  (index (position "Object"
+                                   (pane-model-choices (sheet-pane-model inspector))
+                                   :key #'cdr :test #'string=)))
+             (objc:invoke views "setSelectedSegmentIndex:" index)
+             (objc:invoke views "sendActionsForControlEvents:"
+                          +ui-control-event-value-changed+))))
+   (list "choosing a view shows it"
+         (lambda () (equal "Object"
+                           (pane-model-view-title (sheet-pane-model *inspector-shown*))))
+         (lambda ()
+           (unless (press-inspector-button :done)
+             (error "Done could not be pressed"))))
+   (list "Done puts the inspector away, and ends it"
+         (lambda () (and (null *inspector-shown*) (null *inspectors*)))
+         nil)
+   ;; A drawing, with an option, and a readout under the finger.
+   (list "a byte vector is inspected" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (type-line listener
+                      "(inspect (let ((v (make-array 256 :element-type '(unsigned-byte 8)))) (dotimes (i 256 v) (setf (aref v i) (mod (* i i) 256)))))")))
+   (list "as a histogram, with its option"
+         (lambda () (and (inspector-sheet-up-p)
+                         (inspector-model *inspector-shown*)
+                         (pane-model-drawing (sheet-pane-model *inspector-shown*))))
+         (lambda ()
+           (let* ((inspector *inspector-shown*)
+                  (drawing (inspector-part inspector :drawing))
+                  (slider (first (inspector-part inspector :option-controls))))
+             (when (objc:invoke-bool drawing "isHidden")
+               (error "the drawing is hidden"))
+             (unless (live-pointer-p slider)
+               (error "there is no control for the bins"))
+             (objc:invoke slider "setValue:" 16.0)
+             (objc:invoke slider "sendActionsForControlEvents:"
+                          +ui-control-event-value-changed+))))
+   (list "moving the bins slider draws it again with 16"
+         (lambda ()
+           (eql 16 (count :rect (drawing-scene-ops
+                                 (pane-model-drawing (sheet-pane-model *inspector-shown*)))
+                          :key #'first)))
+         (lambda ()
+           ;; A finger in the middle of the drawing.
+           (let* ((inspector *inspector-shown*)
+                  (bounds (objc:invoke (inspector-part inspector :drawing) "bounds")))
+             (when (< (aref bounds 3) 40)
+               (error "the drawing is ~a points tall" (aref bounds 3)))
+             (inspector-drawing-touch inspector :move
+                                      (/ (aref bounds 2) 2) (/ (aref bounds 3) 2)))))
+   (list "a finger on it is told what is under it"
+         (lambda ()
+           (let ((readout (drawing-view-readout
+                           (inspector-part *inspector-shown* :drawing-object))))
+             (and readout (search "bytes" (first readout)))))
+         nil)
+   (list :hold nil nil)
+   (list "until it lifts" (constantly t)
+         (lambda ()
+           (let ((inspector *inspector-shown*))
+             (inspector-drawing-touch inspector :up 0 0)
+             (when (drawing-view-readout (inspector-part inspector :drawing-object))
+               (error "the readout is still there")))))
+   ;; An Objective-C object, shown by a view of UIKit's own; and a second
+   ;; (inspect x) takes the sheet over from the first.
+   (list "an Objective-C object is inspected" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (type-line listener
+                      "(inspect (inspector:objc (objc:invoke \"UIImage\" \"systemImageNamed:\" \"star.fill\")))")))
+   (list "it takes the sheet over, as a picture in a view of UIKit's own"
+         (lambda ()
+           (let ((inspector *inspector-shown*))
+             (and inspector (inspector-sheet-up-p inspector)
+                  (objc-object-p (inspector-object inspector))
+                  (inspector-model inspector)
+                  (equal "Image" (pane-model-view-title (sheet-pane-model inspector)))
+                  (= 1 (length *inspectors*)))))
+         (lambda ()
+           (let ((host (inspector-part *inspector-shown* :native-host)))
+             (unless (and (not (objc:invoke-bool host "isHidden"))
+                          (= 1 (objc:invoke (objc:invoke host "subviews") "count")))
+               (error "the native view is not in the sheet")))))
+   (list :hold nil nil)
+   (list "and is put away" (constantly t) (lambda () (hide-inspector)))
+   (list "leaving no inspector"
+         (lambda () (and (null *inspector-shown*) (null *inspectors*)
+                         (at-top-level-prompt-p listener)))
          nil)
    ;; An example put at the prompt to change, rather than run.
    (list "an example is asked for, to edit" (lambda () (at-top-level-prompt-p listener))

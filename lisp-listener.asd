@@ -49,6 +49,7 @@
                  (:file "views")
                  (:file "inspector")
                  (:file "standard-views")
+                 (:file "objc-views")
                  ;; Read into the image when "examples" is compiled; named here
                  ;; so that changing one compiles it again.
                  (:static-file "hello" :pathname "../examples/hello.lisp")
@@ -95,6 +96,7 @@ an SBCL built --with-sb-safepoint; see the README for why."
                  (:file "preferences-window")
                  (:file "inspector-window")
                  (:file "screenshot")
+                 (:file "objc-views")
                  (:file "debugger-test")
                  (:file "demo")
                  (:file "app")))))
@@ -114,4 +116,6 @@ an SBCL built --with-sb-safepoint; see the README for why."
                  (:file "history-sheet")
                  (:file "canvas-sheet")
                  (:file "settings-sheet")
+                 (:file "inspector-sheet")
+                 (:file "objc-views")
                  (:file "app")))))

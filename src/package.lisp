@@ -89,9 +89,13 @@
    #:slot-place #:element-place #:aref-place #:hash-place #:value
    ;; Adding to a collection: what kind of addition it takes, and making one.
    #:addition #:add
+   ;; An Objective-C object: a pointer somebody has vouched for.
+   #:objc #:objc-pointer
    ;; Scenes: what a view answers.
-   #:table #:text #:stack #:section #:drawing
+   #:table #:text #:stack #:section #:drawing #:native
    ;; Controls: what DEFINE-CONTROLS answers.
    #:slider #:field #:toggle #:button
    ;; Asking, from the prompt.
-   #:views #:show))
+   #:views #:show
+   ;; From a control's function: walk the inspector into something.
+   #:open-object))

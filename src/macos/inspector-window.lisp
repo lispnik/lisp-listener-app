@@ -8,7 +8,9 @@
 ;;;;     view's scene comes to: a drawing, a table, some text;
 ;;;;   - down the right, the OBJECT panel: what it is, the row selected and a
 ;;;;     field to change it, the controls contributed for it, and the views
-;;;;     there are and who contributed each.
+;;;;     that apply and who contributed each;
+;;;;   - and, from All Views…, a SHEET of every view there is, those that do
+;;;;     not apply included, each saying why not.
 ;;;;
 ;;;; NOTHING HERE EVALUATES.  What is shown is the inspector's MODEL -- strings
 ;;;; and shapes the worker thread made -- and what the person does is passed
@@ -39,8 +41,9 @@
 (defconstant +ns-view-height-sizable+ 16)
 
 (defun inspector-capabilities ()
-  "A table, some text, a drawing: everything a scene can be."
-  '(:table :text :drawing))
+  "A table, some text, a drawing, and a view of AppKit's own: everything a
+scene can be."
+  '(:table :text :drawing :native :appkit))
 
 ;;; The controllers ------------------------------------------------------------------
 ;;;
@@ -74,7 +77,13 @@
 ;;; The drawing ----------------------------------------------------------------------
 
 (objc:define-objc-class inspector-drawing-view ()
-  ((scene :initform nil :accessor drawing-view-scene))
+  ((scene :initform nil :accessor drawing-view-scene)
+   (inspector :initform nil :accessor drawing-view-inspector)
+   (pane :initform 0 :accessor drawing-view-pane)
+   ;; Whether the pointer is over it, and what was last said about where it
+   ;; is: (TEXT X Y), in the canvas's units.
+   (inside :initform nil :accessor drawing-view-inside)
+   (readout :initform nil :accessor drawing-view-readout))
   (:objc-class-name "LispListenerInspectorDrawing")
   (:objc-superclass-name "NSView"))
 
@@ -89,11 +98,54 @@
   (handler-case
       (let ((bounds (objc:invoke pointer "bounds"))
             (scene (drawing-view-scene self)))
-        (paint-shapes (and scene (drawing-scene-ops scene))
+        (paint-shapes (append (and scene (drawing-scene-ops scene))
+                              ;; What is under the pointer, over the top.
+                              (let ((readout (drawing-view-readout self)))
+                                (and readout (apply #'readout-shapes readout))))
                       (or (and scene (drawing-scene-background scene))
                           *canvas-default-background*)
                       (aref bounds 2) (aref bounds 3)))
     (error (condition) (note "inspector drawRect: ~a" condition))))
+
+;;; The pointer over a drawing asks what is under it.  The answer is the
+;;; view's own READOUT function's, computed on the worker like everything of a
+;;; view's, and comes back to SHOW-INSPECTOR-READOUT.  -mouseMoved: needs a
+;;; tracking area; see BUILD-INSPECTOR-PANE.
+(objc:define-objc-method ("mouseMoved:" :void)
+    ((self inspector-drawing-view pointer) (event objc:objc-object-pointer))
+  (handler-case
+      (let* ((point (objc:invoke pointer "convertPoint:fromView:"
+                                 (objc:invoke event "locationInWindow") nil))
+             (bounds (objc:invoke pointer "bounds"))
+             (canvas (canvas-point-from-view (aref point 0) (aref point 1)
+                                             (aref bounds 2) (aref bounds 3)))
+             (inspector (drawing-view-inspector self)))
+        (setf (drawing-view-inside self) t)
+        (when (and inspector (drawing-view-scene self)
+                   (drawing-scene-readout (drawing-view-scene self)))
+          (inspector-request-readout inspector (drawing-view-pane self)
+                                     (car canvas) (cdr canvas))))
+    (error (condition) (note "inspector mouseMoved: ~a" condition))))
+
+(objc:define-objc-method ("mouseExited:" :void)
+    ((self inspector-drawing-view pointer) (event objc:objc-object-pointer))
+  (declare (ignorable event))
+  (handler-case
+      (progn (setf (drawing-view-inside self) nil
+                   (drawing-view-readout self) nil)
+             (objc:invoke pointer "setNeedsDisplay:" t))
+    (error (condition) (note "inspector mouseExited: ~a" condition))))
+
+(defun show-inspector-readout (inspector pane text x y)
+  "Say TEXT at (X, Y) on PANE's drawing -- if the pointer is still over it: the
+answer comes a moment after the question, and the pointer may have left."
+  (let* ((parts (inspector-pane-parts inspector pane))
+         (object (getf parts :drawing-object)))
+    (when (and object (drawing-view-inside object)
+               (live-pointer-p (inspector-part inspector :window)))
+      (setf (drawing-view-readout object) (and text (list text x y)))
+      (objc:invoke (getf parts :drawing) "setNeedsDisplay:" t)
+      t)))
 
 ;;; A pane's table -------------------------------------------------------------------
 
@@ -209,7 +261,8 @@ each stretch of the table that is scrolled to."
 
 ;;; The window's own actions ---------------------------------------------------------
 
-(defmacro define-inspector-method ((selector result-type) (&rest argspecs) &body body)
+(defmacro define-inspector-method ((selector result-type &key on-error) (&rest argspecs)
+                                   &body body)
   `(objc:define-objc-method (,selector ,result-type)
        ((self inspector-window-controller) ,@argspecs)
      (declare (ignorable ,@(mapcar #'first argspecs)))
@@ -218,7 +271,8 @@ each stretch of the table that is scrolled to."
            (declare (ignorable inspector))
            ,@body)
        (error (condition)
-         (note "inspector ~a: ~a" ,selector condition)))))
+         (note "inspector ~a: ~a" ,selector condition)
+         ,on-error))))
 
 (define-inspector-method ("inspectorPath:" :void) ((sender objc:objc-object-pointer))
   (inspector-go-to inspector (objc:invoke sender "tag")))
@@ -252,6 +306,17 @@ each stretch of the table that is scrolled to."
       (destructuring-bind (pane index column) selection
         (inspector-remove-row inspector pane index column)))))
 
+(define-inspector-method ("inspectorInsert:" :void) ((sender objc:objc-object-pointer))
+  ;; The value typed in the Add section's field, put in BEFORE the selected row.
+  (let ((selection (inspector-part inspector :selection))
+        (value (inspector-part inspector :add-value)))
+    (when (and selection (live-pointer-p value))
+      (destructuring-bind (pane index column) selection
+        (inspector-insert-row inspector pane index
+                              (objc:ns-string-to-string (objc:invoke value "stringValue"))
+                              column))
+      (objc:invoke value "setStringValue:" ""))))
+
 (define-inspector-method ("inspectorAdd:" :void) ((sender objc:objc-object-pointer))
   (let ((key (inspector-part inspector :add-key))
         (value (inspector-part inspector :add-value)))
@@ -270,6 +335,7 @@ each stretch of the table that is scrolled to."
     (when (live-pointer-p window)
       (setf (getf *remembered* :inspector) (window-frame-list window))
       (save-preferences)))
+  (hide-views-sheet inspector)
   (inspector-closed inspector))
 
 ;;; Small pieces ---------------------------------------------------------------------
@@ -374,7 +440,11 @@ table and text.  Answers its view (+1) and a plist of its parts."
                                           (declare (ignore initargs))
                                           (objc:invoke pointer "initWithFrame:" content-frame))
                                         :allow-other-keys t))
-         (drawing (objc:objc-object-pointer drawing-object)))
+         (drawing (objc:objc-object-pointer drawing-object))
+         ;; Where a NATIVE scene's view goes: an NSImageView, say.
+         (native-host (make-plain-view content-frame
+                                       (logior +ns-view-width-sizable+
+                                               +ns-view-height-sizable+))))
     (setf (pane-controller-inspector controller) inspector
           (pane-controller-index controller) index)
     (objc:invoke popup "setAutoresizingMask:" +ns-view-min-y-margin+)
@@ -386,9 +456,22 @@ table and text.  Answers its view (+1) and a plist of its parts."
     (objc:invoke pane "addSubview:" content)
     (multiple-value-bind (table-scroll table) (make-inspector-table target content-frame)
       (multiple-value-bind (text-scroll text) (make-inspector-text content-frame)
+        (setf (drawing-view-inspector drawing-object) inspector
+              (drawing-view-pane drawing-object) index)
+        ;; For -mouseMoved: and -mouseExited: -- NSTrackingMouseEnteredAndExited
+        ;; (1), NSTrackingMouseMoved (2), NSTrackingActiveAlways (#x80), since a
+        ;; readout should not want a click on the window first, and
+        ;; NSTrackingInVisibleRect (#x200), so the area is the view at any size.
+        (let ((area (objc:invoke (objc:invoke "NSTrackingArea" "alloc")
+                                 "initWithRect:options:owner:userInfo:"
+                                 content-frame (logior #x01 #x02 #x80 #x200) drawing nil)))
+          (objc:invoke drawing "addTrackingArea:" area)
+          (objc:release area))
         (objc:invoke content "addSubview:" drawing)
+        (objc:invoke content "addSubview:" native-host)
         (objc:invoke content "addSubview:" table-scroll)
         (objc:invoke content "addSubview:" text-scroll)
+        (objc:release native-host)
         (objc:release popup)
         (objc:release options)
         (objc:release content)
@@ -397,6 +480,7 @@ table and text.  Answers its view (+1) and a plist of its parts."
         (values pane
                 (list :controller controller :view pane :popup popup :options options
                       :content content :drawing drawing :drawing-object drawing-object
+                      :native-host native-host
                       :table table :table-scroll table-scroll
                       :text text :text-scroll text-scroll
                       :option-controls '() :option-signature nil :rows-asked -1))))))
@@ -529,21 +613,22 @@ text, each present one getting a part and an absent one hidden."
          (height (- (view-height pane) *inspector-bar-height*
                     (if (pane-model-options pane-model) *inspector-bar-height* 0d0)))
          (drawing (and (pane-model-drawing pane-model) (getf parts :drawing)))
+         (native (and (pane-model-native pane-model) (getf parts :native-host)))
          (table (and (pane-model-table pane-model) (getf parts :table-scroll)))
          (text (and (plusp (length (pane-model-text pane-model))) (getf parts :text-scroll)))
-         (present (remove nil (list drawing table text)))
-         ;; Weights: a drawing wants the most room, a note under one the least.
+         (present (remove nil (list drawing native table text)))
+         ;; Weights: a picture wants the most room, a note under one the least.
          (weights (mapcar (lambda (view)
-                            (cond ((eq view drawing) 3)
+                            (cond ((or (eq view drawing) (eq view native)) 3)
                                   ((eq view table) 2)
-                                  (t (if (or drawing table) 1 2))))
+                                  (t (if (or drawing native table) 1 2))))
                           present))
          (total (reduce #'+ weights))
          (top height))
     (objc:invoke content "setFrame:" (vector 0d0 0d0 width height))
     (objc:invoke (getf parts :options) "setHidden:" (null (pane-model-options pane-model)))
-    (dolist (view (list (getf parts :drawing) (getf parts :table-scroll)
-                        (getf parts :text-scroll)))
+    (dolist (view (list (getf parts :drawing) (getf parts :native-host)
+                        (getf parts :table-scroll) (getf parts :text-scroll)))
       (objc:invoke view "setHidden:" (not (member view present))))
     (loop for view in present
           for weight in weights
@@ -588,8 +673,28 @@ text, each present one getting a part and an absent one hidden."
                     do (set-option-control control option)))))
       ;; What the scene came to.
       (layout-pane-content parts pane-model)
-      (setf (drawing-view-scene (getf parts :drawing-object)) (pane-model-drawing pane-model))
+      (let ((object (getf parts :drawing-object)))
+        (setf (drawing-view-scene object) (pane-model-drawing pane-model))
+        ;; What was said about the point under the pointer was said of the old
+        ;; drawing: ask again of this one.
+        (let ((readout (shiftf (drawing-view-readout object) nil)))
+          (when (and readout (pane-model-drawing pane-model) (drawing-view-inside object))
+            (inspector-request-readout inspector index (second readout) (third readout)))))
       (objc:invoke (getf parts :drawing) "setNeedsDisplay:" t)
+      ;; A native scene's view: made now, here, by the function the view
+      ;; answered, and put in the room laid out for it.
+      (let ((host (getf parts :native-host)))
+        (remove-subviews host)
+        (when (pane-model-native pane-model)
+          (let ((native (handler-case (funcall (pane-model-native pane-model))
+                          (error (condition)
+                            (note "inspector: a native view: ~a" condition)
+                            nil))))
+            (when (live-pointer-p native)
+              (objc:invoke native "setFrame:" (objc:invoke host "bounds"))
+              (objc:invoke native "setAutoresizingMask:"
+                           (logior +ns-view-width-sizable+ +ns-view-height-sizable+))
+              (objc:invoke host "addSubview:" native)))))
       (when (pane-model-table pane-model)
         (let* ((table (getf parts :table))
                (selected (objc:invoke table "selectedRow")))
@@ -675,6 +780,7 @@ or say that it cannot be."
   (let* ((field (inspector-part inspector :editor))
          (caption (inspector-part inspector :editor-caption))
          (remove (inspector-part inspector :remove-button))
+         (insert (inspector-part inspector :insert-button))
          (selection (inspector-part inspector :selection))
          (row (and selection (inspector-pane-row inspector (first selection)
                                                  (second selection))))
@@ -693,13 +799,17 @@ or say that it cannot be."
              (objc:invoke field "setStringValue:" (or (nth cell (row-cells row)) ""))
              (objc:invoke field "setEnabled:" (and (row-editable-p row column) t))
              (when (live-pointer-p remove)
-               (objc:invoke remove "setEnabled:" (and (row-removable-p row column) t))))
+               (objc:invoke remove "setEnabled:" (and (row-removable-p row column) t)))
+             (when (live-pointer-p insert)
+               (objc:invoke insert "setEnabled:" (and (row-insertable-p row column) t))))
             (t
              (objc:invoke caption "setStringValue:" "No row selected")
              (objc:invoke field "setStringValue:" "")
              (objc:invoke field "setEnabled:" nil)
              (when (live-pointer-p remove)
-               (objc:invoke remove "setEnabled:" nil)))))))
+               (objc:invoke remove "setEnabled:" nil))
+             (when (live-pointer-p insert)
+               (objc:invoke insert "setEnabled:" nil)))))))
 
 (defun refresh-inspector-panel (inspector)
   "The object panel, laid out downwards from its top: what the object is, the
@@ -766,7 +876,8 @@ selected row and its field, the contributed controls, and the views."
          ;; and a value for a hash table, a value for a list or a vector that
          ;; grows.  Each field takes a form.
          (setf (inspector-part inspector :add-key) nil
-               (inspector-part inspector :add-value) nil)
+               (inspector-part inspector :add-value) nil
+               (inspector-part inspector :insert-button) nil)
          (when (model-addition model)
            (gap)
            (label (if (eq (model-addition model) :key-and-value)
@@ -796,7 +907,20 @@ selected row and its field, the contributed controls, and the views."
                (objc:invoke button "setFont:" (inspector-font))
                (objc:invoke button "setAutoresizingMask:" +ns-view-min-y-margin+)
                (objc:invoke panel "addSubview:" button)
-               (setf (inspector-part inspector :add-button) button))))
+               (setf (inspector-part inspector :add-button) button))
+             ;; And in the middle, where there is a middle: the same value,
+             ;; put in before the row selected.
+             (when (eq (model-addition model) :value)
+               (decf y 28d0)
+               (let ((button (objc:invoke "NSButton" "buttonWithTitle:target:action:"
+                                          "Insert Before Selected" target
+                                          (objc:coerce-to-selector "inspectorInsert:"))))
+                 (objc:invoke button "setFrame:" (vector (- x 4d0) (- y 4d0) 170d0 28d0))
+                 (objc:invoke button "setFont:" (inspector-font))
+                 (objc:invoke button "setAutoresizingMask:" +ns-view-min-y-margin+)
+                 (objc:invoke button "setEnabled:" nil)
+                 (objc:invoke panel "addSubview:" button)
+                 (setf (inspector-part inspector :insert-button) button)))))
          (gap)
          (let ((views '()) (group nil))
            (loop for control in (model-controls model)
@@ -820,12 +944,264 @@ selected row and its field, the contributed controls, and the views."
          (gap)
          (label "Views" :bold t)
          (loop for (title . contributor) in (model-views model)
-               do (label (format nil "~a  —  ~a" title contributor) :secondary t)))
+               do (label (format nil "~a  —  ~a" title contributor) :secondary t))
+         ;; Every view there is, these and the ones that do not apply.
+         (decf y 30d0)
+         (let ((button (objc:invoke "NSButton" "buttonWithTitle:target:action:"
+                                    "All Views…" target
+                                    (objc:coerce-to-selector "inspectorAllViews:"))))
+           (objc:invoke button "setFrame:" (vector (- x 4d0) y 110d0 28d0))
+           (objc:invoke button "setFont:" (inspector-font))
+           (objc:invoke button "setAutoresizingMask:" +ns-view-min-y-margin+)
+           (objc:invoke panel "addSubview:" button)
+           (setf (inspector-part inspector :all-views-button) button)))
        (setf (inspector-part inspector :control-signature) signature
              (inspector-part inspector :about-shown) (model-about model)
              (inspector-part inspector :views-shown) (model-views model)
              (inspector-part inspector :addition-shown) (model-addition model))))
     (show-inspector-selection inspector)))
+
+;;; Every view there is ---------------------------------------------------------------
+;;;
+;;; A sheet on the inspector's window: the views that apply, and under them the
+;;; ones that do not, each saying why -- "needs (vector (unsigned-byte 8))" --
+;;; which is how a person finds out that a view exists and what it wants.  One
+;;; that applies can be put in either pane from here.  At the foot, what to
+;;; type to contribute one for this kind of object.
+
+(defparameter *views-sheet-width* 760d0)
+(defparameter *views-sheet-height* 440d0)
+
+(defun views-sheet-rows (inspector)
+  "Every view, those that apply first; each the model's plist."
+  (let ((model (inspector-model inspector)))
+    (and model
+         (stable-sort (copy-list (model-all-views model))
+                      (lambda (a b) (and (getf a :applies) (not (getf b :applies))))))))
+
+(defun views-sheet-cell (row column)
+  (ecase column
+    (0 (getf row :title))
+    (1 (getf row :matches))
+    (2 (getf row :contributor))
+    (3 (format nil "~d" (getf row :priority)))
+    (4 (if (getf row :applies) "Applies" (or (getf row :reason) "Does not apply.")))))
+
+(defun views-sheet-selected (inspector)
+  "The row of the sheet's table that is selected, or NIL."
+  (let ((table (inspector-part inspector :sheet-table)))
+    (and (live-pointer-p table)
+         (let ((index (objc:invoke table "selectedRow")))
+           (and (>= index 0) (nth index (inspector-part inspector :sheet-rows)))))))
+
+(defun views-sheet-snippet (inspector)
+  "What to type to contribute a view for what INSPECTOR is looking at."
+  (format nil "(inspector:define-view (my-view :title \"Mine\" ~a)~%    (object)~%  (inspector:text \"~~a\" object))"
+          (model-match (inspector-model inspector))))
+
+(defun show-views-sheet-selection (inspector)
+  "Say what the selected view is for, and offer it to the panes if it applies."
+  (let ((row (views-sheet-selected inspector))
+        (about (inspector-part inspector :sheet-about)))
+    (when (live-pointer-p about)
+      (objc:invoke about "setStringValue:"
+                   (cond ((null row) "Select a view to see what it shows.")
+                         (t (format nil "~a~@[  ~a~]"
+                                    (clip-string (or (getf row :documentation)
+                                                     "It does not say what it shows.")
+                                                 200)
+                                    (getf row :reason)))))
+      (dolist (key '(:sheet-left :sheet-right))
+        (objc:invoke (inspector-part inspector key) "setEnabled:"
+                     (and row (getf row :applies) t))))))
+
+(define-inspector-method ("numberOfRowsInTableView:" (:signed :long-long) :on-error 0)
+    ((table objc:objc-object-pointer))
+  (length (inspector-part inspector :sheet-rows)))
+
+(define-inspector-method ("tableView:objectValueForTableColumn:row:" objc:objc-object-pointer
+                          :on-error (cffi:null-pointer))
+    ((table objc:objc-object-pointer)
+     (column objc:objc-object-pointer)
+     (index (:signed :long-long)))
+  (let ((row (nth index (inspector-part inspector :sheet-rows))))
+    (objc:string-to-ns-string
+     (if row
+         (views-sheet-cell row (objc:invoke (objc:invoke column "identifier") "integerValue"))
+         "")
+     t)))
+
+;;; A view that does not apply is there to be read, and is greyed to say so.
+(define-inspector-method ("tableView:willDisplayCell:forTableColumn:row:" :void)
+    ((table objc:objc-object-pointer)
+     (cell objc:objc-object-pointer)
+     (column objc:objc-object-pointer)
+     (index (:signed :long-long)))
+  (let ((row (nth index (inspector-part inspector :sheet-rows))))
+    (objc:invoke cell "setTextColor:"
+                 (if (and row (getf row :applies))
+                     (objc:invoke "NSColor" "labelColor")
+                     (objc:invoke "NSColor" "secondaryLabelColor")))))
+
+(define-inspector-method ("tableView:shouldEditTableColumn:row:" objc:objc-bool)
+    ((table objc:objc-object-pointer)
+     (column objc:objc-object-pointer)
+     (index (:signed :long-long)))
+  nil)
+
+(define-inspector-method ("tableViewSelectionDidChange:" :void)
+    ((notification objc:objc-object-pointer))
+  (show-views-sheet-selection inspector))
+
+(defun build-views-sheet (inspector)
+  "The sheet: a table of every view, what the selected one is for, the two
+buttons that put it in a pane, and how to add one.  Answers the panel (+1)."
+  (let* ((width *views-sheet-width*) (height *views-sheet-height*)
+         (margin 14d0)
+         (target (objc:objc-object-pointer (inspector-part inspector :controller)))
+         (panel (objc:invoke (objc:invoke "NSPanel" "alloc")
+                             "initWithContentRect:styleMask:backing:defer:"
+                             (vector 0d0 0d0 width height) +ns-window-style-titled+
+                             +ns-backing-store-buffered+ nil))
+         (content (objc:invoke panel "contentView"))
+         (snippet-height 52d0)
+         (buttons-y margin)
+         (snippet-y (+ buttons-y 40d0))
+         (about-y (+ snippet-y snippet-height 22d0))
+         (table-y (+ about-y 40d0))
+         (table-frame (vector margin table-y (- width (* 2 margin))
+                              (- height table-y margin 22d0)))
+         (scroll (objc:invoke (objc:invoke "NSScrollView" "alloc") "initWithFrame:" table-frame))
+         (table (objc:invoke (objc:invoke "NSTableView" "alloc") "initWithFrame:" table-frame)))
+    (objc:invoke panel "setReleasedWhenClosed:" nil)
+    (objc:invoke panel "setTitle:" "Views")
+    (objc:invoke content "addSubview:"
+                 (make-inspector-label "Every view, and whether it applies to this object"
+                                       margin (- height margin 16d0) (- width (* 2 margin))
+                                       :bold t))
+    ;; The table.
+    (loop for (title column-width) in '(("View" 110d0) ("Shows" 190d0) ("From" 150d0)
+                                        ("Priority" 54d0) ("For this object" 210d0))
+          for index from 0
+          do (let ((column (objc:invoke (objc:invoke "NSTableColumn" "alloc")
+                                        "initWithIdentifier:" (format nil "~d" index))))
+               (objc:invoke column "setWidth:" column-width)
+               (objc:invoke (objc:invoke column "headerCell") "setStringValue:" title)
+               (objc:invoke (objc:invoke column "dataCell") "setFont:" (inspector-font))
+               (objc:invoke (objc:invoke column "dataCell") "setLineBreakMode:" 4)
+               (objc:invoke column "setEditable:" nil)
+               (objc:invoke table "addTableColumn:" column)
+               (objc:release column)))
+    (objc:invoke table "setRowHeight:" *inspector-row-height*)
+    (objc:invoke table "setUsesAlternatingRowBackgroundColors:" t)
+    (objc:invoke table "setAllowsMultipleSelection:" nil)
+    (objc:invoke table "setAllowsColumnReordering:" nil)
+    (objc:invoke table "setColumnAutoresizingStyle:" 4)
+    (objc:invoke table "setDataSource:" target)
+    (objc:invoke table "setDelegate:" target)
+    (objc:invoke scroll "setHasVerticalScroller:" t)
+    (objc:invoke scroll "setAutohidesScrollers:" t)
+    (objc:invoke scroll "setBorderType:" 2)       ; a bezel
+    (objc:invoke scroll "setDocumentView:" table)
+    (objc:invoke table "sizeLastColumnToFit")
+    (objc:invoke content "addSubview:" scroll)
+    (objc:release table)
+    (objc:release scroll)
+    ;; What the selected view shows, and why it does not apply if it does not.
+    (let ((about (make-inspector-label "" margin about-y (- width (* 2 margin))
+                                       :secondary t :height 32d0)))
+      (objc:invoke (objc:invoke about "cell") "setLineBreakMode:" 0) ; wrap by word
+      (objc:invoke (objc:invoke about "cell") "setWraps:" t)
+      (objc:invoke content "addSubview:" about)
+      (setf (inspector-part inspector :sheet-about) about))
+    ;; How to add one.
+    (objc:invoke content "addSubview:"
+                 (make-inspector-label "To add a view of your own, evaluate something like this:"
+                                       margin (+ snippet-y snippet-height 2d0)
+                                       (- width (* 2 margin)) :bold t))
+    (let ((snippet (make-inspector-label (views-sheet-snippet inspector) margin snippet-y
+                                         (- width (* 2 margin)) :height snippet-height)))
+      (objc:invoke snippet "setFont:" (inspector-mono-font))
+      (objc:invoke snippet "setSelectable:" t)
+      (objc:invoke (objc:invoke snippet "cell") "setLineBreakMode:" 2) ; clip
+      (objc:invoke content "addSubview:" snippet)
+      (setf (inspector-part inspector :sheet-snippet) snippet))
+    ;; The buttons.
+    (flet ((button (title selector x button-width key)
+             (let ((button (objc:invoke "NSButton" "buttonWithTitle:target:action:"
+                                        title target (objc:coerce-to-selector selector))))
+               (objc:invoke button "setFrame:" (vector x buttons-y button-width 30d0))
+               (when key (objc:invoke button "setKeyEquivalent:" key))
+               (objc:invoke content "addSubview:" button)
+               button)))
+      (setf (inspector-part inspector :sheet-left)
+            (button "Show in Left Pane" "inspectorSheetLeft:" margin 150d0 nil)
+            (inspector-part inspector :sheet-right)
+            (button "Show in Right Pane" "inspectorSheetRight:" (+ margin 154d0) 156d0 nil)
+            (inspector-part inspector :sheet-done)
+            (button "Done" "inspectorSheetDone:" (- width margin 90d0) 90d0
+                    (string #\Return))))
+    (setf (inspector-part inspector :sheet) panel
+          (inspector-part inspector :sheet-table) table)
+    panel))
+
+(defun views-sheet-open-p (inspector)
+  (live-pointer-p (inspector-part inspector :sheet)))
+
+(defun refresh-views-sheet (inspector)
+  "Show the model's views in the sheet, if it is up."
+  (when (views-sheet-open-p inspector)
+    (setf (inspector-part inspector :sheet-rows) (views-sheet-rows inspector))
+    (objc:invoke (inspector-part inspector :sheet-table) "reloadData")
+    (objc:invoke (inspector-part inspector :sheet-snippet) "setStringValue:"
+                 (views-sheet-snippet inspector))
+    (show-views-sheet-selection inspector)
+    t))
+
+(defun show-views-sheet (inspector)
+  (hide-views-sheet inspector)
+  (let ((panel (build-views-sheet inspector))
+        (window (inspector-part inspector :window)))
+    (refresh-views-sheet inspector)
+    ;; No completion handler: HIDE-VIEWS-SHEET ends it, on every path.
+    (objc:invoke window "beginSheet:completionHandler:" panel (cffi:null-pointer))
+    panel))
+
+(defun hide-views-sheet (inspector)
+  "Take the sheet down.  Idempotent."
+  (let ((panel (inspector-part inspector :sheet)))
+    (when (live-pointer-p panel)
+      (let ((parent (objc:invoke panel "sheetParent")))
+        (if (cffi:null-pointer-p parent)
+            (objc:invoke panel "orderOut:" nil)
+            (objc:invoke parent "endSheet:" panel)))
+      (objc:invoke (inspector-part inspector :sheet-table) "setDataSource:" (cffi:null-pointer))
+      (objc:invoke (inspector-part inspector :sheet-table) "setDelegate:" (cffi:null-pointer))
+      ;; Not released outright: the window is still sliding it away.
+      (objc:autorelease panel))
+    (dolist (key '(:sheet :sheet-table :sheet-about :sheet-snippet :sheet-left :sheet-right
+                   :sheet-done))
+      (setf (inspector-part inspector key) nil))
+    t))
+
+(defun views-sheet-choose (inspector pane)
+  "Put the sheet's selected view in PANE, and take the sheet down."
+  (let ((row (views-sheet-selected inspector)))
+    (when (and row (getf row :applies))
+      (hide-views-sheet inspector)
+      (inspector-select-view inspector pane (getf row :name)))))
+
+(define-inspector-method ("inspectorAllViews:" :void) ((sender objc:objc-object-pointer))
+  (show-views-sheet inspector))
+
+(define-inspector-method ("inspectorSheetDone:" :void) ((sender objc:objc-object-pointer))
+  (hide-views-sheet inspector))
+
+(define-inspector-method ("inspectorSheetLeft:" :void) ((sender objc:objc-object-pointer))
+  (views-sheet-choose inspector 0))
+
+(define-inspector-method ("inspectorSheetRight:" :void) ((sender objc:objc-object-pointer))
+  (views-sheet-choose inspector 1))
 
 ;;; The window -----------------------------------------------------------------------
 
@@ -905,6 +1281,7 @@ and to the right for each one already open."
       (dotimes (index 2)
         (refresh-inspector-pane inspector index))
       (refresh-inspector-panel inspector)
+      (refresh-views-sheet inspector)
       t)))
 
 (defun show-inspector (inspector)

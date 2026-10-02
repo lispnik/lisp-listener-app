@@ -64,7 +64,8 @@
   ;; asked on the worker, with the rest, so that thread 1 need call nobody's
   ;; method to know.
   (editable '())
-  (removable '()))
+  (removable '())
+  (insertable '()))
 
 (defstruct table-model
   (columns '())
@@ -84,7 +85,12 @@
   (options '())
   drawing                               ; a DRAWING-SCENE, or NIL
   table                                 ; a TABLE-MODEL, or NIL
-  (text ""))
+  (text "")
+  ;; A function answering a view of the toolkit's own, to be called on thread
+  ;; 1, or NIL: a NATIVE scene's.  And what that scene falls back to, as
+  ;; text, for when the pane is printed rather than shown.
+  native
+  (native-text ""))
 
 (defstruct control-model
   group label kind value min max enabled
@@ -99,6 +105,12 @@
   (views '())                           ; (TITLE . CONTRIBUTOR)
   ;; What can be added to the object: NIL, :VALUE or :KEY-AND-VALUE.
   (addition nil)
+  ;; Every view there is, applicable or not, each a plist: :NAME :TITLE
+  ;; :MATCHES :CONTRIBUTOR :PRIORITY :APPLIES and, where it does not, :REASON.
+  (all-views '())
+  ;; What a view of the caller's own would say to match this object, as it
+  ;; would be typed: ":type vector", or ":objc-class \"NSWindow\"".
+  (match "")
   (message nil))
 
 ;;; The session ----------------------------------------------------------------------
@@ -118,6 +130,13 @@
   (listener nil)
   (message nil)
   (update-queued nil)
+  ;; The point last asked about on a drawing, (PANE X Y), until the worker
+  ;; gets to it; and what it said, where there is no window to say it in.
+  (readout-request nil)
+  (readout nil)
+  ;; Objective-C objects walked into, retained for as long as this is open: a
+  ;; pointer in a Lisp list keeps nothing alive.
+  (retained-objects '())
   ;; The front end's: its window and what is in it.
   (retained '()))
 
@@ -127,10 +146,28 @@
 (defvar *inspectors-lock* (bt:make-lock "lisp-listener inspectors"))
 
 (defun make-inspector (object &optional (listener *listener*))
-  (%make-inspector :path (list (cons (inspector-print object 40) object))
-                   :package (or (and listener (listener-package listener))
-                                *package*)
-                   :listener listener))
+  (let ((inspector (%make-inspector
+                    :path (list (cons (inspector-print object 40) object))
+                    :package (or (and listener (listener-package listener))
+                                 *package*)
+                    :listener listener)))
+    (hold-objc-object inspector object)
+    inspector))
+
+(defun hold-objc-object (inspector object)
+  "Retain OBJECT for INSPECTOR, if it is an Objective-C object."
+  (when (and (objc-object-p object)
+             (not (member object (inspector-retained-objects inspector))))
+    (ignore-errors (objc:retain (objc-object-pointer object)))
+    (push object (inspector-retained-objects inspector)))
+  object)
+
+(defun walk-into (inspector object label)
+  "Put OBJECT on the end of INSPECTOR's path."
+  (hold-objc-object inspector object)
+  (setf (inspector-path inspector)
+        (append (inspector-path inspector)
+                (list (cons (or label (inspector-print object 30)) object)))))
 
 (defun inspector-object (inspector)
   "The object INSPECTOR is looking at now: the end of its path."
@@ -143,11 +180,25 @@
 ;;; From a scene to a pane -------------------------------------------------------------
 
 (defun flatten-scene (scene)
-  "SCENE as the three things a pane can show: the first drawing in it, its
-tables and headings as the segments of one table, and its text."
-  (let ((drawing nil) (segments '()) (columns nil) (texts '()))
+  "SCENE as the things a pane can show: the first drawing in it, its tables
+and headings as the segments of one table, its text, and -- where the front
+end can show one -- its native view's function."
+  (let ((drawing nil) (segments '()) (columns nil) (texts '()) (native nil)
+        (native-text ""))
     (labels ((walk (scene)
                (etypecase scene
+                 (native-scene
+                  ;; A view of the toolkit's own where there is that toolkit
+                  ;; to show it, and what it falls back to where there is not.
+                  (cond ((and (member :native (inspector-capabilities)) (not native))
+                         (setf native (native-scene-thunk scene))
+                         (when (native-scene-fallback scene)
+                           (setf native-text
+                                 (nth-value 3 (flatten-scene
+                                               (inspector:stack
+                                                (native-scene-fallback scene)))))))
+                        ((native-scene-fallback scene)
+                         (walk (native-scene-fallback scene)))))
                  (drawing-scene (unless drawing (setf drawing scene)))
                  (text-scene (push (text-scene-string scene) texts))
                  (table-scene
@@ -163,7 +214,8 @@ tables and headings as the segments of one table, and its text."
                   (mapc #'walk (section-scene-children scene))))))
       (walk scene))
     (values drawing (nreverse segments) columns
-            (format nil "~{~a~^~%~%~}" (nreverse texts)))))
+            (format nil "~{~a~^~%~%~}" (nreverse texts))
+            native native-text)))
 
 (defun table-from-segments (segments columns)
   (and segments
@@ -210,7 +262,8 @@ tables and headings as the segments of one table, and its text."
                                         places)))
                          (make-row :cells (nreverse cells) :places places
                                    :editable (supports :set)
-                                   :removable (supports :remove)))))
+                                   :removable (supports :remove)
+                                   :insertable (supports :insert)))))
                  (error (condition)
                    (make-row :cells (list "" (format nil "#<error: ~a>"
                                                      (report-condition condition))))))))
@@ -221,7 +274,10 @@ tables and headings as the segments of one table, and its text."
   (let ((rows (table-model-rows table)))
     (loop for index from 0 below (min (1+ upto) (table-model-count table))
           unless (gethash index rows)
-            do (setf (gethash index rows) (compute-row table index))))
+            do (setf (gethash index rows)
+                     (handler-case (with-time-limit () (compute-row table index))
+                       (inspector-timeout ()
+                         (make-row :cells (list "" "#<took too long>")))))))
   table)
 
 (defun table-row (table index)
@@ -230,7 +286,7 @@ already there are only ever added to."
   (and table (gethash index (table-model-rows table))))
 
 (defun pane-for-view (view object settings choices)
-  (multiple-value-bind (drawing segments columns text)
+  (multiple-value-bind (drawing segments columns text native native-text)
       (flatten-scene (view-scene view object settings))
     (let ((table (table-from-segments segments columns)))
       (when table
@@ -252,7 +308,9 @@ already there are only ever added to."
                                :choices (view-option-choices option)))
        :drawing drawing
        :table table
-       :text text))))
+       :text text
+       :native native
+       :native-text native-text))))
 
 (defun describe-size (object)
   (typecase object
@@ -263,6 +321,29 @@ already there are only ever added to."
     (list (let ((length (ignore-errors (list-length object))))
             (if length (format nil "~d element~:p" length) "circular")))
     (t nil)))
+
+(defun object-match (object)
+  "What a DEFINE-VIEW would say to match OBJECT, as text: the most specific of
+its classes that has a name anyone would type -- one that prints without a
+double colon -- or its Objective-C class."
+  (if (objc-object-p object)
+      (format nil ":objc-class ~s" (or (objc-class-name-of object) "NSObject"))
+      (format nil ":type ~(~a~)"
+              (or (find-if (lambda (name)
+                             (and name (symbolp name)
+                                  (not (search "::" (prin1-to-string name)))))
+                           (class-precedence-names (class-of object)))
+                  t))))
+
+(defun describe-object-kind (object)
+  "The Type and Class lines of the object panel, as (LABEL . STRING)s."
+  (if (objc-object-p object)
+      ;; The wrapper is nobody's business: what it wraps is.
+      (list (cons "Type" "an Objective-C object")
+            (cons "Class" (or (objc-class-name-of object) "?")))
+      (list (cons "Type" (inspector-print (ignore-errors (type-of object)) 80))
+            (cons "Class" (inspector-print
+                           (ignore-errors (class-name (class-of object))) 80)))))
 
 (defun compute-model (inspector)
   "Everything a front end shows of INSPECTOR, computed now.  The worker's."
@@ -290,11 +371,10 @@ already there are only ever added to."
                                               (cdr (assoc name (object-state-settings state)))
                                               choices)))
      :about (remove nil
-                    (list (cons "Type" (inspector-print (ignore-errors (type-of object)) 80))
-                          (cons "Class" (inspector-print
-                                         (ignore-errors (class-name (class-of object))) 80))
-                          (let ((size (ignore-errors (describe-size object))))
-                            (and size (cons "Size" size)))))
+                    (append (describe-object-kind object)
+                            (list (let ((size (ignore-errors (describe-size object))))
+                                    (and size (cons "Size" size))))))
+     :match (or (ignore-errors (object-match object)) ":type t")
      :controls (loop for (group . controls) in (applicable-controls object)
                      append (loop for control in controls
                                   for place = (control-place control)
@@ -313,6 +393,21 @@ already there are only ever added to."
                                                              t))
                                            :control control)))
      :addition (ignore-errors (inspector:addition object))
+     :all-views (mapcar (lambda (view)
+                          (multiple-value-bind (applies reason)
+                              (view-applicability view object)
+                            (list :name (view-name view)
+                                  :title (view-title view)
+                                  :matches (view-matches view)
+                                  :contributor (format nil "~(~a~)~@[ · ~a~]"
+                                                       (or (view-package view) "?")
+                                                       (view-source view))
+                                  :priority (view-priority view)
+                                  :documentation (getf (view-properties view)
+                                                       :documentation)
+                                  :applies applies
+                                  :reason reason)))
+                        *views*)
      :views (mapcar (lambda (view)
                       (cons (view-title view)
                             (format nil "~(~a~)~@[ · ~a~]"
@@ -327,7 +422,33 @@ already there are only ever added to."
 
 (defvar *inspector-jobs-lock* (bt:make-lock "lisp-listener inspector jobs"))
 (defvar *inspector-jobs-ready* (bt:make-condition-variable :name "lisp-listener inspector jobs"))
-(defvar *inspector-worker* nil)
+
+(defvar *inspector-worker-mode* :auto
+  "When the worker is used: :AUTO means whenever there is a main thread to
+hand a result to, which is always but under `make test'.  T means always, for
+the test of the worker itself.")
+
+(defvar *inspector-watchdog* nil)
+
+(defun inspector-watchdog-loop ()
+  ;; For as long as there is a worker to watch.
+  (loop while (and *inspector-worker* (bt:thread-alive-p *inspector-worker*))
+        do
+    (sleep 0.25)
+    (let ((timed *inspector-timed*)
+          (worker *inspector-worker*))
+      (when (and timed worker
+                 (> (- (get-internal-real-time) (cdr timed))
+                    (* *inspector-time-limit* internal-time-units-per-second)))
+        (let ((token (car timed)))
+          (ignore-errors
+           (bt:interrupt-thread
+            worker
+            (lambda ()
+              ;; Still the same piece of work?  If it finished in the moment
+              ;; between the look and the interrupt, there is nothing to stop.
+              (when (and *inspector-timed* (eq (car *inspector-timed*) token))
+                (error 'inspector-timeout))))))))))
 
 (defun inspector-worker-loop ()
   (loop
@@ -337,23 +458,60 @@ already there are only ever added to."
                  (let ((oldest (first (last *inspector-jobs*))))
                    (setf *inspector-jobs* (butlast *inspector-jobs*))
                    oldest))))
+      ;; :STOP is how the thread is asked to end: by returning, of its own
+      ;; accord.  A thread parked in that wait cannot be made to leave it --
+      ;; see "Interrupt needs two mechanisms" in CLAUDE.md -- and ECL, asked
+      ;; to quit with one there, waits for it for good.
+      (when (eq job :stop)
+        (return))
       (handler-case (funcall job)
         (error (condition)
           (note "inspector: ~a" condition))))))
+
+(defun stop-inspector-worker ()
+  "Ask the worker to end, and wait a moment for it to.  For a process about to
+exit; the next job starts another."
+  (let ((worker *inspector-worker*))
+    (when (and worker (bt:thread-alive-p worker))
+      (bt:with-lock-held (*inspector-jobs-lock*)
+        (push :stop *inspector-jobs*)
+        (bt:condition-notify *inspector-jobs-ready*))
+      (loop repeat 50
+            while (or (bt:thread-alive-p worker)
+                      (and *inspector-watchdog* (bt:thread-alive-p *inspector-watchdog*)))
+            do (sleep 0.1)))
+    (setf *inspector-worker* nil)))
 
 (defun run-on-worker (function)
   "Call FUNCTION on the inspector's thread -- or here and now, when there is no
 main thread to hand the result to, which is what makes `make test' able to ask
 and then look."
-  (cond ((null *main-thread-target*) (funcall function))
+  (cond ((and (null *main-thread-target*) (not (eq *inspector-worker-mode* t)))
+         (funcall function))
         (t
          (bt:with-lock-held (*inspector-jobs-lock*)
            (unless (and *inspector-worker* (bt:thread-alive-p *inspector-worker*))
              (setf *inspector-worker*
                    (bt:make-thread #'inspector-worker-loop :name "lisp listener inspector")))
+           (unless (and *inspector-watchdog* (bt:thread-alive-p *inspector-watchdog*))
+             (setf *inspector-watchdog*
+                   (bt:make-thread #'inspector-watchdog-loop
+                                   :name "lisp listener inspector watchdog")))
            (push function *inspector-jobs*)
            (bt:condition-notify *inspector-jobs-ready*))))
   (values))
+
+(defvar *inspector* nil
+  "The inspector whose work is being done, for what a control's function or a
+view may want of it: INSPECTOR:OPEN-OBJECT.")
+
+(defun call-in-object-thread (inspector function)
+  "Call FUNCTION where INSPECTOR's object wants to be touched: on thread 1 for
+an Objective-C object -- AppKit and UIKit want theirs touched nowhere else --
+waiting for it; and here, on the worker, for everything else."
+  (if (and *main-thread-target* (objc-object-p (inspector-object inspector)))
+      (on-main-thread (:wait t) (funcall function))
+      (funcall function)))
 
 (defun deliver-model (inspector model)
   (cond (*main-thread-target*
@@ -372,11 +530,23 @@ NOTE-CHANGED every step -- it is computed once."
   (flet ((update ()
            (setf (inspector-update-queued inspector) nil)
            (when action
-             (handler-case (let ((*package* (or (inspector-package inspector) *package*)))
-                             (funcall action))
-               (error (condition)
-                 (setf (inspector-message inspector) (report-condition condition)))))
-           (deliver-model inspector (compute-model inspector))))
+             ;; Where the object is NOW; the action may walk somewhere else,
+             ;; and the model is then computed where that wants to be.
+             (call-in-object-thread
+              inspector
+              (lambda ()
+                (handler-case
+                    (let ((*package* (or (inspector-package inspector) *package*))
+                          (*inspector* inspector))
+                      (with-time-limit () (funcall action)))
+                  (error (condition)
+                    (setf (inspector-message inspector) (report-condition condition)))))))
+           (deliver-model inspector
+                          (call-in-object-thread
+                           inspector
+                           (lambda ()
+                             (let ((*inspector* inspector))
+                               (compute-model inspector)))))))
     (cond (action (run-on-worker #'update))
           ((inspector-update-queued inspector) nil)
           (t (setf (inspector-update-queued inspector) t)
@@ -448,22 +618,23 @@ a place: the inspector now looks at that value."
        inspector
        (lambda ()
          (let ((value (inspector:place-value place)))
-           (setf (inspector-path inspector)
-                 (append (inspector-path inspector)
-                         (list (cons (or (inspector:place-label place)
-                                         (let ((label (first (row-cells row))))
-                                           (and (stringp label) (plusp (length label)) label))
-                                         (inspector-print value 30))
-                                     value))))))))))
+           (walk-into inspector value
+                      (or (inspector:place-label place)
+                          (let ((label (first (row-cells row))))
+                            (and (stringp label) (plusp (length label)) label))))))))))
 
 (defun inspector-open-object (inspector object &optional label)
   "Walk into OBJECT, from wherever INSPECTOR is."
-  (inspector-update
-   inspector
-   (lambda ()
-     (setf (inspector-path inspector)
-           (append (inspector-path inspector)
-                   (list (cons (or label (inspector-print object 30)) object)))))))
+  (inspector-update inspector (lambda () (walk-into inspector object label))))
+
+(defun inspector:open-object (object &optional label)
+  "Walk the inspector into OBJECT.  For a control's function -- a button that
+leads somewhere -- which is called while an inspector is at work and has no
+other way to say which."
+  (unless *inspector*
+    (error "There is no inspector at work to walk anywhere."))
+  (walk-into *inspector* object label)
+  object)
 
 (defun inspector-go-to (inspector depth)
   "Go back to step DEPTH of the path, 0 being where the inspector started."
@@ -506,6 +677,25 @@ in its cell COLUMN if that is given."
          (place-remove place)
          (note-changed-elsewhere inspector))))))
 
+(defun inspector-insert-row (inspector pane index text &optional column)
+  "Put the value of TEXT, a form, in BEFORE row INDEX of PANE: in a list, or a
+vector that can grow."
+  (let ((place (row-place (inspector-pane-row inspector pane index) column)))
+    (when place
+      (inspector-update
+       inspector
+       (lambda ()
+         (unless (inspector:place-supports-p place :insert)
+           (error "Nothing can be inserted here."))
+         (when (zerop (length (string-trim " " (or text ""))))
+           (error "There is no value to insert."))
+         (place-insert place (eval (read-from-string text)))
+         (note-changed-elsewhere inspector))))))
+
+(defun row-insertable-p (row &optional column)
+  (let ((cell (row-cell row column)))
+    (and cell (nth cell (row-insertable row)))))
+
 (defun inspector-add (inspector value-text &optional key-text)
   "Add to the object INSPECTOR is looking at: the value of VALUE-TEXT, a form,
 under the value of KEY-TEXT where the object wants a key."
@@ -523,6 +713,28 @@ under the value of KEY-TEXT where the object wants a key."
          (if (eq kind :key-and-value)
              (inspector:add object (evaluate value-text "value") (evaluate key-text "key"))
              (inspector:add object (evaluate value-text "value"))))
+       (note-changed-elsewhere inspector)))))
+
+(defun inspector-add-line (inspector text)
+  "Add to the object from ONE line of text: a form for the value -- or, where
+the object wants a key, a form for the key and then one for the value.  For a
+front end with one field to type in."
+  (inspector-update
+   inspector
+   (lambda ()
+     (let* ((object (inspector-object inspector))
+            (kind (inspector:addition object))
+            (text (string-trim '(#\Space #\Tab #\Newline) (or text ""))))
+       (unless kind
+         (error "Nothing can be added to this."))
+       (when (zerop (length text))
+         (error "There is nothing to add."))
+       (if (eq kind :key-and-value)
+           (multiple-value-bind (key end) (read-from-string text)
+             (when (>= end (length text))
+               (error "A key and then a value: two forms."))
+             (inspector:add object (eval (read-from-string text t nil :start end)) (eval key)))
+           (inspector:add object (eval (read-from-string text))))
        (note-changed-elsewhere inspector)))))
 
 (defun inspector-set-control (inspector index &optional value)
@@ -558,9 +770,63 @@ under the value of KEY-TEXT where the object wants a key."
     (when table
       (run-on-worker
        (lambda ()
-         (let ((*package* (or (inspector-package inspector) *package*)))
-           (ensure-rows table (+ upto *inspector-row-chunk*)))
+         (call-in-object-thread
+          inspector
+          (lambda ()
+            (let ((*package* (or (inspector-package inspector) *package*)))
+              (ensure-rows table (+ upto *inspector-row-chunk*)))))
          (deliver-model inspector model))))))
+
+;;; What is under the pointer --------------------------------------------------------
+
+(defun inspector-request-readout (inspector pane x y)
+  "Ask what PANE's drawing has to say about the point (X, Y), in the canvas's
+units.  The answer comes to SHOW-INSPECTOR-READOUT.  Asked many times as the
+pointer moves, it is answered for where the pointer is, not for where it was."
+  (let ((waiting (inspector-readout-request inspector)))
+    (setf (inspector-readout-request inspector) (list pane x y))
+    (unless waiting
+      (run-on-worker
+       (lambda ()
+         (let ((request (shiftf (inspector-readout-request inspector) nil)))
+           (when request
+             (destructuring-bind (pane x y) request
+               (let* ((model (inspector-model inspector))
+                      (pane-model (and model (nth pane (model-panes model))))
+                      (text (and pane-model
+                                 (call-in-object-thread
+                                  inspector
+                                  (lambda ()
+                                    (handler-case
+                                        (with-time-limit ()
+                                          (drawing-readout (pane-model-drawing pane-model)
+                                                           x y))
+                                      (error () nil)))))))
+                 (cond (*main-thread-target*
+                        (on-main-thread ()
+                          (show-inspector-readout inspector pane text x y)))
+                       (t (setf (inspector-readout inspector) text))))))))))))
+
+(defun readout-shapes (text x y)
+  "What to paint over a drawing to say TEXT about the point (X, Y): a crosshair
+there and the words beside it, as the canvas's own shapes -- so that whatever
+paints a drawing paints its readout too, on either toolkit."
+  (drawing-scene-ops
+   (inspector:drawing ()
+     (canvas:pen 0.5)
+     (canvas:color 1 1 1 0.5)
+     ;; Past the edge of any view: the canvas's units are of its SHORTER side.
+     (canvas:line -1000 y 1000 y)
+     (canvas:line x -1000 x 1000)
+     (when (and text (plusp (length text)))
+       (let* ((size 7)
+              (width (+ 5 (* 0.62 size (length text))))
+              (left (if (> (+ x 4 width) 100) (- x 4 width) (+ x 4)))
+              (bottom (if (> (+ y 16) 100) (- y 15) (+ y 4))))
+         (canvas:color 0 0 0 0.8)
+         (canvas:box left bottom width 11)
+         (canvas:color :white)
+         (canvas:text (+ left 2.5) (+ bottom 2) text size))))))
 
 ;;; Changed --------------------------------------------------------------------------
 
@@ -604,6 +870,8 @@ change made THROUGH an inspector says so itself."
               (or (drawing-scene-fallback drawing)
                   (format nil "[a drawing of ~d shape~:p]"
                           (length (drawing-scene-ops drawing))))))
+    (when (and (pane-model-native pane) (plusp (length (pane-model-native-text pane))))
+      (format stream "~a~%" (pane-model-native-text pane)))
     (when (plusp (length text))
       (format stream "~a~%" text))
     (when table
@@ -671,7 +939,11 @@ was inspected is not printed again under it."
              (push inspector *inspectors*))
            (run-on-worker
             (lambda ()
-              (let ((model (compute-model inspector)))
+              (let ((model (call-in-object-thread
+                            inspector
+                            (lambda ()
+                              (let ((*inspector* inspector))
+                                (compute-model inspector))))))
                 (on-main-thread ()
                   (setf (inspector-model inspector) model)
                   (show-inspector inspector))))))
@@ -682,4 +954,7 @@ was inspected is not printed again under it."
   "INSPECTOR's window has gone.  Thread 1."
   (bt:with-lock-held (*inspectors-lock*)
     (setf *inspectors* (remove inspector *inspectors*)))
+  ;; What it kept alive may go.
+  (dolist (object (shiftf (inspector-retained-objects inspector) '()))
+    (ignore-errors (objc:release (objc-object-pointer object))))
   inspector)

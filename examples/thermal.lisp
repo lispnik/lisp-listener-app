@@ -30,7 +30,13 @@
         (side (/ 180 24)))
     (inspector:drawing
         (:fallback (format nil "A plate at ~a, heated to ~a in the middle."
-                           (slot-value plate 'ambient) (slot-value plate 'source)))
+                           (slot-value plate 'ambient) (slot-value plate 'source))
+         ;; What to say about a point on the picture: the pointer, or a finger.
+         :readout (lambda (x y)
+                    (let ((c (floor (+ x 90) side))
+                          (r (floor (+ y 90) side)))
+                      (when (and (< -1 c 24) (< -1 r 24))
+                        (format nil "~,1f degrees" (aref cells r c))))))
       (dotimes (r 24)
         (dotimes (c 24)
           (hue (* 0.66 (- 1 (max 0 (min 1 (/ (aref cells r c) 100))))))

@@ -46,9 +46,17 @@
     t))
 
 (defgeneric place-remove (place)
-  (:documentation "Take the value at PLACE away: unbind the slot, drop the key.")
+  (:documentation "Take the value at PLACE away: unbind the slot, drop the key,
+close the gap in a sequence.")
   (:method ((place inspector:place))
     (error "~a cannot be removed." (inspector:place-label place))))
+
+(defgeneric place-insert (place value)
+  (:documentation "Put VALUE in just before PLACE, moving PLACE and what is
+after it along.  Only where PLACE-SUPPORTS-P says :INSERT.")
+  (:method ((place inspector:place) value)
+    (declare (ignore value))
+    (error "Nothing can be inserted before ~a." (inspector:place-label place))))
 
 ;;; A place made of functions --------------------------------------------------------
 ;;;
@@ -146,8 +154,77 @@ cannot be changed.  What a computed row of a table is."
   (with-slots (sequence index) place
     (setf (elt sequence index) value)))
 
+(defun growable-vector-p (object)
+  (and (vectorp object) (array-has-fill-pointer-p object) (adjustable-array-p object)))
+
 (defmethod inspector:place-supports-p ((place inspector:element-place) operation)
-  (eq operation :set))
+  ;; Any element can be set.  One can be taken out, or another put in before
+  ;; it, only where the sequence can change its length: a vector with a fill
+  ;; pointer that may be adjusted.
+  (with-slots (sequence) place
+    (case operation
+      (:set t)
+      ((:remove :insert) (growable-vector-p sequence)))))
+
+(defmethod place-remove ((place inspector:element-place))
+  (with-slots (sequence index) place
+    (replace sequence sequence :start1 index :start2 (1+ index))
+    (decf (fill-pointer sequence))))
+
+(defmethod place-insert ((place inspector:element-place) value)
+  (with-slots (sequence index) place
+    (unless (element-type-accepts-p sequence value)
+      (error "That is not something this vector can hold."))
+    (vector-push-extend value sequence)
+    (replace sequence sequence :start1 (1+ index) :start2 index
+                               :end2 (1- (length sequence)))
+    (setf (aref sequence index) value)))
+
+;;; An element of a list.  A place of its own, because a list changes length
+;;; by changing its conses: what is done here is done IN PLACE, so that the
+;;; list being inspected -- its first cons -- is still the list afterwards.
+;;; That is why the only element of a list cannot be removed: what would be
+;;; left is NIL, which is not that cons.
+
+(defclass list-element-place (inspector:place)
+  ((list :initarg :list)
+   (index :initarg :index)))
+
+(defun list-element-place (list index)
+  (make-instance 'list-element-place :list list :index index
+                                     :label (format nil "[~d]" index)))
+
+(defmethod inspector:place-value ((place list-element-place))
+  (with-slots (list index) place
+    (nth index list)))
+
+(defmethod (setf inspector:place-value) (value (place list-element-place))
+  (with-slots (list index) place
+    (setf (nth index list) value)))
+
+(defmethod inspector:place-supports-p ((place list-element-place) operation)
+  (with-slots (list) place
+    (case operation
+      ((:set :insert) t)
+      (:remove (and (cdr list) t)))))
+
+(defmethod place-remove ((place list-element-place))
+  (with-slots (list index) place
+    (if (zerop index)
+        ;; The first cons stays, and takes over the second's contents.
+        (setf (car list) (cadr list)
+              (cdr list) (cddr list))
+        (let ((before (nthcdr (1- index) list)))
+          (setf (cdr before) (cddr before))))))
+
+(defmethod place-insert ((place list-element-place) value)
+  (with-slots (list index) place
+    (let ((cons (nthcdr index list)))
+      ;; A new cons AFTER this one holding what this one held, and the new
+      ;; value in this one: the same as inserting before it, with no need for
+      ;; the cons in front -- which the first has not got.
+      (setf (cdr cons) (cons (car cons) (cdr cons))
+            (car cons) value))))
 
 (defmethod inspector:place-accepts-p ((place inspector:element-place) value)
   (with-slots (sequence) place
@@ -247,3 +324,54 @@ nothing, :VALUE for an element, :KEY-AND-VALUE for an entry under a key.")
              (let ((*print-length* 4) (*print-level* 2)) (prin1-to-string value))))
     (vector-push-extend value object)
     value))
+
+;;; An Objective-C object ------------------------------------------------------------
+;;;
+;;; A foreign pointer has no type that says what it points at.  Whether it is
+;;; an Objective-C object can only be found out by sending it a message, and a
+;;; message sent to something that is not one -- a malloc'd buffer, a C struct
+;;; -- does not signal an error: it takes the process down.  So the inspector
+;;; never asks.  A pointer on its own is shown as an address and nothing more;
+;;; it is treated as an object only when somebody has SAID it is one, by
+;;; wrapping it: (inspector:objc pointer), or the button on a pointer's view.
+
+(defstruct (objc-object (:constructor %make-objc-object (pointer)))
+  pointer)
+
+(defun inspector:objc (pointer)
+  "Say that POINTER is an Objective-C object, so that the inspector may treat
+it as one: ask its class, and show the views that apply to that class.
+
+    (inspect (inspector:objc (objc:invoke \"NSDate\" \"date\")))
+
+You are vouching for it.  A pointer that is not an object, wrapped and
+inspected, will crash the program the first time it is sent a message."
+  (cond ((objc-object-p pointer) pointer)
+        ((and (cffi:pointerp pointer) (not (cffi:null-pointer-p pointer)))
+         (%make-objc-object pointer))
+        (t (error "~s is not a pointer to an Objective-C object." pointer))))
+
+(defun inspector:objc-pointer (object)
+  "The pointer inside OBJECT, which INSPECTOR:OBJC made."
+  (objc-object-pointer object))
+
+(defun objc-class-name-of (object)
+  "The name of OBJECT's class, or NIL if it will not say."
+  (ignore-errors
+   (objc:ns-string-to-string
+    (objc:invoke (objc:invoke (objc-object-pointer object) "class") "description"))))
+
+(defun objc-kind-of-p (object class-name)
+  "Whether OBJECT, an OBJC-OBJECT, is an instance of the class called
+CLASS-NAME or of a subclass.  NIL for anything else, and for a class that is
+not loaded."
+  (and (objc-object-p object)
+       (ignore-errors
+        (objc:invoke-bool (objc-object-pointer object) "isKindOfClass:"
+                          (objc:coerce-to-objc-class class-name)))))
+
+(defmethod print-object ((object objc-object) stream)
+  (print-unreadable-object (object stream)
+    (format stream "ObjC ~a ~x"
+            (or (objc-class-name-of object) "object")
+            (ignore-errors (cffi:pointer-address (objc-object-pointer object))))))

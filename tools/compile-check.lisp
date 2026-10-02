@@ -46,15 +46,16 @@
     "keymap" "indent" "transcript" "completion" "paren-highlight" "paredit-view" "history-search"
     "streams" "config"
     "restarts" "preferences" "files" "canvas" "places" "views" "inspector"
-    "standard-views" "examples" "repl"))
+    "standard-views" "objc-views" "examples" "repl"))
 
 (defparameter *front-ends*
   '(("macos" "macos/view" "macos/window" "macos/restarts-panel"
      "macos/history-panel" "macos/canvas-window"
-     "macos/preferences-window" "macos/inspector-window" "macos/screenshot" "macos/debugger-test" "macos/demo"
+     "macos/preferences-window" "macos/inspector-window" "macos/screenshot"
+     "macos/objc-views" "macos/debugger-test" "macos/demo"
      "macos/app")
     ("ios" "ios/view" "ios/restarts-sheet" "ios/history-sheet" "ios/canvas-sheet"
-     "ios/settings-sheet" "ios/app")))
+     "ios/settings-sheet" "ios/inspector-sheet" "ios/objc-views" "ios/app")))
 
 (defparameter *front-end*
   (or (second sb-ext:*posix-argv*) "macos"))

@@ -65,19 +65,13 @@
                                               (or (vectorp object) (proper-list-p object))))
     (sequence)
   "A list's or a vector's elements, each one a place."
-  ;; A list is copied into a vector of its conses' places up front: ELT on a
-  ;; list is a walk from the head, and a table asks for rows in any order.
   (if (listp sequence)
-      (let ((conses (coerce (loop for cons on sequence collect cons) 'vector)))
-        (inspector:table
-         :columns '("Index" "Value")
-         :count (length conses)
-         :row (lambda (index)
-                (let ((cons (aref conses index)))
-                  (list (format nil "[~d]" index)
-                        (inspector:place :label (format nil "[~d]" index)
-                                         :get (lambda () (car cons))
-                                         :set (lambda (value) (setf (car cons) value))))))))
+      (inspector:table
+       :columns '("Index" "Value")
+       :count (length sequence)
+       :row (lambda (index)
+              (list (format nil "[~d]" index)
+                    (list-element-place sequence index))))
       (inspector:table
        :columns '("Index" "Value")
        :count (length sequence)
@@ -325,7 +319,15 @@
           (width (/ 180d0 bins)))
       (inspector:drawing
           (:fallback (format nil "~d byte~:p in ~d bins; the fullest holds ~d."
-                             (length bytes) bins (reduce #'max counts :initial-value 0)))
+                             (length bytes) bins (reduce #'max counts :initial-value 0))
+           :readout (lambda (x y)
+                      (declare (ignore y))
+                      (let ((bin (floor (+ x 90) width)))
+                        (when (< -1 bin bins)
+                          (format nil "bytes ~d to ~d: ~d"
+                                  (ceiling (* bin 256) bins)
+                                  (1- (ceiling (* (1+ bin) 256) bins))
+                                  (aref counts bin))))))
         (canvas:color :gray)
         (canvas:line -90 -80 90 -80)
         (loop for index from 0 below bins
@@ -385,7 +387,13 @@ type where that says so; by looking at the first few where it does not."
            ;; No more points than there are points across to put them on.
            (step (max 1 (ceiling count 400))))
       (inspector:drawing
-          (:fallback (format nil "~d number~:p, from ~a to ~a." count low high))
+          (:fallback (format nil "~d number~:p, from ~a to ~a." count low high)
+           :readout (lambda (x y)
+                      (declare (ignore y))
+                      (let ((index (round (* (/ (+ x 90) 180) (1- count)))))
+                        (when (< -1 index count)
+                          (format nil "[~d] = ~a" index
+                                  (inspector-print (aref vector index) 40))))))
         (canvas:color :gray)
         (canvas:rect -90 -80 180 160)
         (canvas:color :cyan)
@@ -449,7 +457,15 @@ type where that says so; by looking at the first few where it does not."
              (shown-columns (ceiling columns column-step))
              (side (/ 180d0 (max shown-rows shown-columns))))
         (inspector:drawing
-            (:fallback (format nil "~d × ~d numbers, from ~a to ~a." rows columns low high))
+            (:fallback (format nil "~d × ~d numbers, from ~a to ~a." rows columns low high)
+             :readout (lambda (x y)
+                        (let ((c (floor (+ x 90) side))
+                              (r (floor (- 90 y) side)))
+                          (when (and (< -1 r shown-rows) (< -1 c shown-columns))
+                            (format nil "[~d ~d] = ~a" (* r row-step) (* c column-step)
+                                    (inspector-print
+                                     (aref matrix (* r row-step) (* c column-step))
+                                     40))))))
           (loop for r from 0 below shown-rows
                 do (loop for c from 0 below shown-columns
                          for value = (aref matrix (* r row-step) (* c column-step))
@@ -511,3 +527,106 @@ type where that says so; by looking at the first few where it does not."
                   (when (< (1+ r) shown-rows)
                     (let ((there (project (1+ r) c (height (1+ r) c))))
                       (canvas:line (car here) (cdr here) (car there) (cdr there)))))))))))))
+
+;;; More particulars -----------------------------------------------------------------
+
+(defun subclass-rows (class depth limit)
+  "Rows for CLASS's subclasses, and theirs, indented, LIMIT levels down."
+  (when (< depth limit)
+    (loop for name in (sort (copy-list (class-direct-subclass-names class)) #'string<
+                            :key #'symbol-name)
+          for subclass = (find-class name nil)
+          when subclass
+            append (cons (list (format nil "~v@{  ~}~(~a~)" (1+ depth) name)
+                               (inspector:value subclass))
+                         (subclass-rows subclass (1+ depth) limit)))))
+
+(inspector:define-view (hierarchy-view :title "Hierarchy" :type class
+                                       :options ((depth 3 :integer :min 1 :max 8)))
+    (class &key depth)
+  "A class among its relations: what it inherits from, most specific first,
+and what inherits from it, as a tree.  Every one is a row to walk into."
+  (inspector:stack
+   (inspector:section
+    "Inherits from"
+    (inspector:table
+     :columns '("Class" "")
+     :rows (loop for name in (rest (class-precedence-names class))
+                 for super = (find-class name nil)
+                 when super
+                   collect (list (string-downcase name) (inspector:value super)))))
+   (inspector:section
+    "Inherited by"
+    (inspector:table
+     :rows (or (subclass-rows class 0 depth)
+               (list (list "nothing" "")))))))
+
+(inspector:define-view (condition-view :title "Condition" :type condition :priority 5)
+    (condition)
+  "A condition: what it says, and what kind of thing it is."
+  (inspector:stack
+   (inspector:text "~a" (report-condition condition))
+   (inspector:section
+    "About"
+    (inspector:table
+     :columns '("" "")
+     :rows (list (list "type" (inspector-print (type-of condition) 120))
+                 (list "an error" (if (typep condition 'error) "yes" "no"))
+                 (list "a warning" (if (typep condition 'warning) "yes" "no"))
+                 (list "inherits from"
+                       (inspector:value
+                        (rest (class-precedence-names (class-of condition))))))))))
+
+(inspector:define-view (disassembly-view :title "Disassembly" :type function :priority -10
+                                         :when #'function-disassembly)
+    (function)
+  "What the compiler made of it, where the Lisp will say."
+  (inspector:text "~a" (function-disassembly function)))
+
+(defun string-lines (string)
+  (loop with start = 0
+        for newline = (position #\Newline string :start start)
+        collect (subseq string start newline)
+        while newline
+        do (setf start (1+ newline))))
+
+(inspector:define-view (lines-view :title "Lines" :type string :priority 6
+                                   :when (lambda (string) (find #\Newline string)))
+    (string)
+  "A string of several lines, a row a line."
+  (let ((lines (coerce (string-lines string) 'vector)))
+    (inspector:table
+     :columns '("Line" "Text")
+     :count (length lines)
+     :row (lambda (index)
+            (list (format nil "~d" (1+ index)) (aref lines index))))))
+
+;;; A pointer ------------------------------------------------------------------------
+;;;
+;;; Shown as an address, and never sent a message: see INSPECTOR:OBJC in
+;;; src/places.lisp for why.  The button is how a person says "this one is an
+;;; Objective-C object", which is theirs to know.
+
+(defun non-null-pointer-p (object)
+  (and (cffi:pointerp object) (not (cffi:null-pointer-p object))))
+
+(inspector:define-view (pointer-view :title "Pointer" :type t :priority 5
+                                     :when #'cffi:pointerp)
+    (pointer)
+  "A foreign pointer: where it points, and nothing about what is there."
+  (inspector:stack
+   (inspector:table
+    :columns '("" "")
+    :rows (list (list "address" (format nil "#x~x" (cffi:pointer-address pointer)))
+                (list "null" (if (cffi:null-pointer-p pointer) "yes" "no"))))
+   (inspector:text "What is at an address cannot be told from the address.  If this is an
+Objective-C object, say so -- the button in the panel, or
+(inspect (inspector:objc pointer)) -- and it is shown as one.  If it is not,
+saying so will crash the program.")))
+
+(inspector:define-controls (pointer-controls :title "Pointer" :when #'non-null-pointer-p)
+    (pointer)
+  (list (inspector:button "Treat as Objective-C object"
+                          (lambda ()
+                            (inspector:open-object (inspector:objc pointer)
+                                                   "as an object")))))

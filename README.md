@@ -167,9 +167,19 @@ on a row walks into that value, and the path across the top leads back.
 Select a row and the panel on the right has a field to change it — a form,
 evaluated — which the place refuses if it cannot hold the result: a byte
 vector will not take 999. In a grid the cell changed is the one clicked.
-**Remove** unbinds a slot or drops a hash table's key, and where the object can
-be added to there are fields for it: a key and a value for a hash table, a
-value for a list or a vector that can grow.
+**Remove** unbinds a slot, drops a hash table's key, or takes an element out of
+a list or a vector that can grow; and where the object can be added to there
+are fields for it: a key and a value for a hash table, a value for a list or
+such a vector, with **Insert Before Selected** to put it in the middle. A list
+is changed in place, so it is still the list you were looking at.
+
+Hold the pointer over a drawing and it says what is under it: the bin of a
+histogram and how many bytes fell in it, the cell of a heat map and its value.
+**All Views…** lists every view there is, the ones that do not apply included,
+each saying what it wanted — `needs (vector (unsigned-byte 8))` — and what to
+type to add one of your own. A view that never finishes is stopped after five
+seconds (`lisp-listener::*inspector-time-limit*`) and its pane says so; the
+rest of the inspector carries on.
 
 **Anyone can contribute a view.** A view is matched by a type and, if that is
 not enough, a predicate; it is given the object and answers a *scene* — a
@@ -195,9 +205,37 @@ the object and redraws every view of it. `(example "thermal")` is the whole
 thing in forty lines: a hot plate, a view that shows the heat spreading, and
 two sliders that change it.
 
+A drawing can say what is under the pointer: give `inspector:drawing` a
+`:readout`, a function of a point on it answering a string.
+
+**Objective-C objects** are inspected too, once somebody says that is what they
+are. A foreign pointer is shown as an address and asked nothing, because asking
+a pointer that is not an object is a crash; its view has a button, *Treat as
+Objective-C object*, and `(inspect (inspector:objc pointer))` says the same at
+the prompt. Then it has its class and its description, an `NSArray` its
+elements and an `NSDictionary` its entries, each one walked into in turn. A
+view for a class of your own is matched by `:objc-class`, runs on the main
+thread, and may answer a view of the toolkit's own:
+
+```lisp
+(inspector:define-view (image-view :title "Image" :objc-class "NSImage"
+                                   :requires (:appkit))
+    (image)
+  (inspector:native
+   (lambda () (make-my-image-view (inspector:objc-pointer image)))
+   :fallback (inspector:text "An image.")))
+```
+
+An `NSImage`, an `NSView` and an `NSWindow` come with pictures that way, and a
+window with a slider for its opacity.
+
 `(inspector:views x)` lists the views that apply, and `(inspector:show x
-"Hex")` prints one as text. On iOS, for now, that is what `(inspect x)` does:
-the inspector's window is a Mac's.
+"Hex")` prints one as text.
+
+**On iOS** the inspector is a sheet with one pane: the views across the top,
+the view's options and the object's controls under them, and at the foot the
+selected row with a field and Open, Set, Insert, Remove and Add. A finger on a
+drawing is the pointer.
 
 ### Settings
 
@@ -493,7 +531,7 @@ red — "no offenders" is also what an empty scan says.
   `env -u SBCL_HOME` is the workaround.
 - Interrupting with ⌘. a form that is blocked inside a foreign call takes
   effect when the call returns, which is the ordinary SBCL caveat.
-- There is no editor integration and no inspector. It is a Listener.
+- There is no editor integration. It is a Listener.
 
 ## Privacy
 

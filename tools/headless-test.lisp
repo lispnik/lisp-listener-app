@@ -55,14 +55,15 @@
                           "completion" "paren-highlight" "paredit-view" "history-search"
                           "streams" "config"
                           "restarts" "preferences" "files" "canvas" "places" "views"
-                          "inspector" "standard-views" "examples" "repl")
+                          "inspector" "standard-views" "objc-views" "examples" "repl")
                         #+sbcl '("macos/view" "macos/window" "macos/restarts-panel"
                                  "macos/history-panel" "macos/canvas-window"
                                  "macos/preferences-window" "macos/inspector-window"
-                                 "macos/screenshot"
+                                 "macos/screenshot" "macos/objc-views"
                                  "macos/app")
                         #+ecl '("ios/view" "ios/restarts-sheet" "ios/history-sheet"
-                                "ios/canvas-sheet" "ios/settings-sheet" "ios/app")))
+                                "ios/canvas-sheet" "ios/settings-sheet"
+                                "ios/inspector-sheet" "ios/objc-views" "ios/app")))
     (load (merge-pathnames (format nil "src/~a.lisp" name) *root*)
           :external-format :utf-8)))
 
@@ -1551,8 +1552,26 @@ bound away from the front end's own -- a test has no business writing into
     (inspector-add inspector ":c")
     (check (equal list '(:a :b :c)) "which goes on its end, so that it is still the same list")
     (let ((row (inspector-pane-row inspector 0 0)))
-      (check (and (row-editable-p row) (not (row-removable-p row)))
-             "a list's element can be set and not removed")))
+      (check (and (row-editable-p row) (row-removable-p row) (row-insertable-p row))
+             "a list's element can be set, removed, and inserted before"))
+    ;; In the middle, and at the front: the list is the same cons throughout.
+    (inspector-insert-row inspector 0 1 ":new")
+    (check (equal list '(:a :new :b :c)) "inserting at a row puts the value in before it")
+    (inspector-insert-row inspector 0 0 "(list 1 2)")
+    (check (equal list '((1 2) :a :new :b :c))
+           "before the first, too, and it is still the same list")
+    (inspector-remove-row inspector 0 0)
+    (inspector-remove-row inspector 0 1)
+    (check (equal list '(:a :b :c)) "and removing takes one out, the first included")
+    (check (= 3 (length (pane-rows inspector 0))) "the rows follow")
+    (inspector-insert-row inspector 0 0 "")
+    (check (and (equal list '(:a :b :c)) (model-message (inspector-model inspector)))
+           "with nothing typed there is nothing to insert, and it says so"))
+  (let* ((one (list :only))
+         (inspector (make-inspector one)))
+    (inspector-refresh inspector)
+    (check (not (row-removable-p (inspector-pane-row inspector 0 0)))
+           "the only element of a list cannot be removed: NIL would not be that list"))
   (let ((growable (make-array 2 :element-type '(unsigned-byte 8) :adjustable t
                                 :fill-pointer 2 :initial-element 7))
         (fixed (byte-vector 1 2)))
@@ -1564,12 +1583,178 @@ bound away from the front end's own -- a test has no business writing into
       (check (and (= 3 (length growable)) (= 9 (aref growable 2))) "it grows by one")
       (inspector-add inspector "999")
       (check (and (= 3 (length growable)) (model-message (inspector-model inspector)))
-             "and refuses what its elements cannot be")))
+             "and refuses what its elements cannot be")
+      (inspector-select-view inspector 0 'elements-view)
+      (inspector-insert-row inspector 0 1 "5")
+      (check (equalp growable #(7 5 7 9)) "a vector that can grow takes one in the middle")
+      (inspector-insert-row inspector 0 1 "999")
+      (check (and (equalp growable #(7 5 7 9)) (model-message (inspector-model inspector)))
+             "and refuses there what it refuses at the end")
+      (inspector-remove-row inspector 0 0)
+      (check (equalp growable #(5 7 9)) "and gives one up"))
+    (let ((inspector (make-inspector fixed)))
+      (inspector-refresh inspector)
+      (inspector-select-view inspector 0 'elements-view)
+      (let ((row (inspector-pane-row inspector 0 0)))
+        (check (and (row-editable-p row) (not (row-removable-p row))
+                    (not (row-insertable-p row)))
+               "a vector of a fixed length keeps its length"))))
   ;; INSPECT, at the prompt, where there is no window: it prints.
   (say listener "(inspect (list :alpha :beta))")
   (check-text listener "[1]" "(inspect x) at the prompt shows the object")
   (check-text listener ":BETA" "in its best view")
   (check-text listener "Other views: Object, Describe." "and says what other views there are"))
+
+(define-condition test-trouble (error)
+  ((what :initarg :what))
+  (:report (lambda (condition stream)
+             (format stream "Trouble with ~a." (slot-value condition 'what)))))
+
+(defclass test-warm-plate (test-plate) ())
+
+(defcase case-more-views "More views: hierarchy, condition, lines, and why a view does not apply."
+  (flet ((shown (object &optional view &rest options)
+           (with-output-to-string (*standard-output*)
+             (apply #'inspector:show object view options))))
+    (let ((hierarchy (shown (find-class 'test-plate) "Hierarchy")))
+      (check (and (search "Inherits from" hierarchy) (search "standard-object" hierarchy))
+             "Hierarchy: what a class inherits from")
+      (check (search "test-warm-plate" hierarchy) "and what inherits from it"))
+    (let ((trouble (make-condition 'test-trouble :what "the pump")))
+      (check (equal "Condition" (first (inspector:views trouble)))
+             "a condition opens on a view of its own")
+      (check (search "Trouble with the pump." (shown trouble))
+             "Condition: its report, as it would be said"))
+    (let ((text (format nil "one~%two~%three")))
+      (check (equal "Lines" (first (inspector:views text))) "a string of several lines opens as Lines")
+      (check (search "three" (shown text "Lines")) "a row a line")
+      (check (not (member "Lines" (inspector:views "one line") :test #'string=))
+             "and a string of one line has no such view"))
+    #+sbcl
+    (check (and (member "Disassembly" (inspector:views #'car) :test #'string=)
+                (plusp (length (shown #'car "Disassembly"))))
+           "Disassembly: what the compiler made of a function")
+    #+ecl
+    (check (not (member "Disassembly" (inspector:views #'car) :test #'string=))
+           "no Disassembly where the Lisp would have to run a C compiler to say"))
+  ;; Why not: every view there is, with a reason where it does not apply.
+  (let* ((inspector (make-inspector (list 1 2 3))))
+    (inspector-refresh inspector)
+    (let* ((all (model-all-views (inspector-model inspector)))
+           (entry (lambda (name) (find name all :key (lambda (view) (getf view :name))))))
+      (check (= (length all) (length *views*)) "the model lists every view there is")
+      (check (getf (funcall entry 'elements-view) :applies) "the ones that apply")
+      (let ((histogram (funcall entry 'histogram-view)))
+        (check (and (not (getf histogram :applies))
+                    (search "unsigned-byte" (getf histogram :reason)))
+               "and the ones that do not, with the type each wanted"))
+      (check (search "Objective-C NSArray" (getf (funcall entry 'objc-array-view) :reason))
+             "a view of an Objective-C class says that is what it needs")
+      (check (search "own test says no" (getf (funcall entry 'cons-view) :reason))
+             "and one whose type matched and whose test did not says that")
+      (check (equal "(vector (unsigned-byte 8))" (getf (funcall entry 'hex-view) :matches))
+             "each says what it is matched by"))
+    (check (equal ":type cons" (model-match (inspector-model inspector)))
+           "and the model says what a view of one's own would match this by"))
+  (check (equal ":type vector" (object-match (byte-vector 1 2)))
+         "by a class with a name anyone would type, not the implementation's own")
+  (check (search "test-plate" (object-match (make-instance 'test-plate)))
+         "which for an instance is its class")
+  ;; A view that needs a toolkit is not offered where there is none.
+  (inspector:define-view (test-needy-view :title "Needy" :type test-plate
+                                          :requires (:hologram))
+      (plate)
+    (inspector:text "~a" plate))
+  (check (not (member "Needy" (inspector:views (make-instance 'test-plate)) :test #'string=))
+         "a view that requires what the front end has not got does not apply")
+  (check (search "hologram"
+                 (nth-value 1 (view-applicability (find-view 'test-needy-view)
+                                                  (make-instance 'test-plate))))
+         "and says what it needed")
+  ;; A native scene, with no toolkit, is its fallback.
+  (inspector:define-view (test-native-view :title "Native" :type test-plate :priority 30)
+      (plate)
+    (declare (ignore plate))
+    (inspector:native (lambda () (error "nobody calls this here"))
+                      :fallback (inspector:text "a native view's fallback")))
+  (let ((inspector (make-inspector (make-instance 'test-plate))))
+    (inspector-refresh inspector)
+    (let ((pane (first (model-panes (inspector-model inspector)))))
+      (if (member :native (inspector-capabilities))
+          (check (and (functionp (pane-model-native pane))
+                      (zerop (length (pane-model-text pane))))
+                 "a native scene, where there is a toolkit to show it, is its function")
+          (check (and (null (pane-model-native pane))
+                      (search "fallback" (pane-model-text pane)))
+                 "a native scene, where there is no toolkit to show it, is its fallback"))
+      (check (search "a native view's fallback"
+                     (with-output-to-string (stream) (print-pane pane stream)))
+             "and printed, it is its fallback either way")))
+  (setf *views* (remove-if (lambda (view)
+                             (member (view-name view) '(test-needy-view test-native-view)))
+                           *views*)))
+
+(defcase case-readout "Readouts: what a drawing says about a point on it."
+  (let* ((bytes (byte-vector 0 0 0 255))
+         (inspector (make-inspector bytes)))
+    (inspector-refresh inspector)
+    (inspector-set-option inspector 0 :bins 4)
+    (let ((drawing (pane-model-drawing (first (model-panes (inspector-model inspector))))))
+      (check (equal "bytes 0 to 63: 3" (drawing-readout drawing -80 0))
+             "the histogram says which bytes a bin holds, and how many")
+      (check (equal "bytes 192 to 255: 1" (drawing-readout drawing 80 0)) "bin by bin")
+      (check (null (drawing-readout drawing -99 0)) "and nothing off the end of it"))
+    (inspector-request-readout inspector 0 -80 0)
+    (check (equal "bytes 0 to 63: 3" (inspector-readout inspector))
+           "an inspector asked about a point answers for its pane's drawing")
+    (inspector-request-readout inspector 1 0 0)
+    (check (null (inspector-readout inspector)) "and a pane with no drawing has nothing to say"))
+  (let* ((matrix (make-array '(2 2) :element-type 'single-float
+                                    :initial-contents '((1.0 2.0) (3.0 4.0))))
+         (scene (view-scene (find-view 'heat-map-view) matrix '())))
+    (check (search "[0 0] = 1.0" (drawing-readout scene -45 45))
+           "the heat map says which cell is under the point, and its value")
+    (check (search "[1 1] = 4.0" (drawing-readout scene 45 -45)) "rows counted from the top"))
+  (let ((scene (view-scene (find-view 'plot-view) (vector 10 20 30) '())))
+    (check (search "[2] = 30" (drawing-readout scene 90 0)) "a plot says which element is nearest"))
+  (let ((broken (inspector:drawing (:readout (lambda (x y) (/ x (- y y)))))))
+    (check (null (drawing-readout broken 1 1)) "a readout that signals says nothing")))
+
+(defstruct test-tarpit depth)
+
+(defcase case-time-limit "A view that never finishes is stopped, and the inspector goes on."
+  (inspector:define-view (test-tarpit-view :title "Tarpit" :type test-tarpit :priority 30)
+      (tarpit)
+    (loop (incf (test-tarpit-depth tarpit))))
+  (let ((*inspector-worker-mode* t)
+        (old-limit *inspector-time-limit*))
+    (setf *inspector-time-limit* 1)
+    (unwind-protect
+         (flet ((model-after (inspector)
+                  (setf (inspector-model inspector) nil)
+                  (inspector-refresh inspector)
+                  (loop repeat 100
+                        until (inspector-model inspector)
+                        do (sleep 0.1))
+                  (inspector-model inspector)))
+           (let* ((tarpit (make-test-tarpit :depth 0))
+                  (model (model-after (make-inspector tarpit))))
+             (check model "an inspector whose view loops forever still gets a model")
+             (check (and model
+                         (search "more than 1 second"
+                                 (pane-model-text (first (model-panes model)))))
+                    "the pane says the view took too long")
+             (check (and model
+                         (equal "Object" (pane-model-view-title (second (model-panes model)))))
+                    "and the pane beside it shows its view as ever"))
+           (let ((model (model-after (make-inspector (list 1 2)))))
+             (check (and model (equal "Elements" (pane-model-view-title
+                                                  (first (model-panes model)))))
+                    "the worker is still there for the next inspector")))
+      (setf *inspector-time-limit* old-limit
+            *views* (remove 'test-tarpit-view *views* :key #'view-name))
+      (stop-inspector-worker)))
+  (check (null *inspector-worker*) "and the worker ends when it is asked to"))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -1585,7 +1770,8 @@ bound away from the front end's own -- a test has no business writing into
                 case-history-search
                 case-prompt-is-recorded
                 case-canvas case-examples case-preferences
-                case-places case-views case-scenes case-inspector))
+                case-places case-views case-scenes case-inspector
+                case-more-views case-readout case-time-limit))
   (funcall case))
 
 (format t "~&~%headless-test: ~d check~:p, ~d failure~:p~%" *checks* *failures*)

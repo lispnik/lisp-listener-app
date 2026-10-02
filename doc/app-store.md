@@ -30,8 +30,8 @@ anywhere and no account is needed.
   the transcript; on a phone it is a sheet. It takes a finger, too.
 - Try lists thirteen short examples -- a spiral, a fractal tree, the Mandelbrot
   set, Conway's Life, Snake, Pong -- each a screen of Lisp to read and change.
-- (inspect x) shows a value the way that suits it -- a byte vector as hex, a
-  table's entries, an object's slots -- and names the other views there are.
+- (inspect x) opens an inspector: a byte vector as a histogram or as hex, a
+  table's entries, an object's slots. Tap a row to change it or walk into it.
 - Open loads a .lisp file from the Files app, and Files can open one in Lisp
   Listener.
 - A bar above the keyboard has the keys a phone lacks: Tab, Esc, the arrows,
@@ -63,8 +63,9 @@ The things most worth trying:
 9. On an iPad, the canvas should sit beside the transcript and leave you the
    keyboard. With a hardware keyboard: Option-Return starts a new indented
    line, Cmd-. stops, Cmd-K clears, Cmd-+ and Cmd-- change the size of the type.
-10. Type (inspect (list 1 2 3)), then (inspector:show 255 "Integer"): each
-    should print the value laid out, and (inspect x) the other views it has.
+10. Type (inspect (list 1 2 3)): a sheet comes up. Tap a row, type a form in
+    the field and tap Set; try Insert, Remove and Add, and the other views
+    along the top. Then (example "thermal"): move a slider, touch the picture.
 11. Tap the gear at the end of the key bar: the switches should take effect at
     once, and the stepper should resize everything in the transcript.
 12. Rotate the device. On an iPad with the canvas up, narrow the window: the
@@ -140,7 +141,7 @@ THIRTEEN EXAMPLES TO TAKE APART
 • Each is a screen of Lisp. Run one, read it, or put it at the prompt and change it.
 
 AN INSPECTOR
-• (inspect x) lays a value out in the view that suits it: an object's slots, a table's entries, a byte vector as hex, an integer in every base.
+• (inspect x) opens an inspector, in the view that suits the value: an object's slots, a table's entries, a byte vector as a histogram or hex. Tap a row to change it.
 • Several views apply to most things, and you can add your own for your own data.
 
 YOUR FILES AND YOUR HISTORY
@@ -191,6 +192,7 @@ Already answered in the bundle: `ITSAppUsesNonExemptEncryption` is false.
 | 0.1.54 | a closed canvas stays closed |
 | 0.1.56 | touch on the canvas, the docked canvas on iPad, Open, saving a picture, twelve examples, Settings and the size of the type |
 | 0.1.58 | C-a goes to the start of the line, after the prompt |
-| next | (inspect x), printed as text; a thirteenth example |
+| 0.1.61 | (inspect x), printed as text; a thirteenth example |
+| next | the inspector as a sheet: views, options and controls, Set, Insert, Remove and Add, a readout under a finger |
 
 Everything above describes the next build. Do not paste it over an older one.

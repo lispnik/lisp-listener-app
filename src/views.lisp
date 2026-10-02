@@ -34,6 +34,50 @@
 
 (in-package #:lisp-listener)
 
+;;; The time a view may take --------------------------------------------------------
+;;;
+;;; Here, ahead of the first thing that is timed.  The thread that does the
+;;; timing, and the rest of the worker, are in src/inspector.lisp.
+
+(defvar *inspector-worker* nil
+  "The inspector's worker thread, once there is one.")
+
+;;; A view is somebody else's code, and may never return.  Everything of
+;;; somebody else's that the worker runs -- a view, a row, a place, a control
+;;; -- runs inside WITH-TIME-LIMIT, and a second thread, the watchdog, looks
+;;; four times a second at how long the worker has been in there.  Past the
+;;; limit it interrupts the worker with an error, which the handler already
+;;; around the call turns into "took too long" in place of the view.  One
+;;; view that hangs is then one pane that says so, and not every inspector in
+;;; the program waiting behind it for ever.
+
+(defparameter *inspector-time-limit* 5
+  "Seconds a view, a row or a place may take before it is stopped.")
+
+(define-condition inspector-timeout (error) ()
+  (:report (lambda (condition stream)
+             (declare (ignore condition))
+             (format stream "It took more than ~d second~:p, and was stopped."
+                     *inspector-time-limit*))))
+
+(defvar *inspector-timed* nil
+  "While the worker is inside WITH-TIME-LIMIT: (TOKEN . START), TOKEN a fresh
+cons that says WHICH time it is in there, so that an interrupt sent for one
+piece of work cannot land on the next.")
+
+(defun call-with-time-limit (function)
+  (if (and *inspector-worker* (eq (bt:current-thread) *inspector-worker*))
+      (unwind-protect
+           (progn (setf *inspector-timed* (cons (list nil) (get-internal-real-time)))
+                  (funcall function))
+        (setf *inspector-timed* nil))
+      ;; Not the worker: under `make test', or on thread 1 for an Objective-C
+      ;; object.  Nobody is watching, and thread 1 is not for interrupting.
+      (funcall function)))
+
+(defmacro with-time-limit (() &body body)
+  `(call-with-time-limit (lambda () ,@body)))
+
 ;;; Scenes ---------------------------------------------------------------------------
 
 (defstruct scene)
@@ -59,7 +103,18 @@
   (ops '())
   (background nil)
   ;; What to say where a drawing cannot be shown.
-  (fallback nil))
+  (fallback nil)
+  ;; A function of a point on the drawing, x and y in the canvas's units,
+  ;; answering what to say about it -- the value under the pointer -- or NIL.
+  (readout nil))
+
+(defstruct (native-scene (:include scene))
+  ;; A function of no arguments, called on thread 1, answering a view of the
+  ;; toolkit's own -- an NSView, a UIView -- autoreleased.
+  thunk
+  ;; The scene to show where that cannot be: as text, or in a front end that
+  ;; has no such toolkit.
+  fallback)
 
 (defun inspector:table (&key columns rows count row)
   "A table.  Either ROWS, a list of rows, or COUNT and ROW, a function of a
@@ -90,7 +145,14 @@ walked into."
   "SCENES under a heading."
   (make-section-scene :title title :children (remove nil scenes)))
 
-(defun call-with-drawing (function fallback)
+(defun inspector:native (thunk &key fallback)
+  "A view of the toolkit's own.  THUNK is called on the main thread and answers
+an NSView (a UIView, on iOS), autoreleased, which is put in the pane as it is:
+an NSImageView for an image, say.  FALLBACK is the scene to show where a native
+view cannot be -- printed as text, or on the other platform."
+  (make-native-scene :thunk thunk :fallback fallback))
+
+(defun call-with-drawing (function fallback &optional readout)
   ;; The canvas's own machinery, pointed at a list: while *CANVAS-FRAME* is
   ;; bound, LINE and BOX and the rest collect there instead of going to the
   ;; canvas.  The pen and the turtle are bound too, so that a view neither
@@ -103,13 +165,26 @@ walked into."
     (funcall function)
     (make-drawing-scene :ops (reverse (car *canvas-frame*))
                         :background *canvas-background*
-                        :fallback fallback)))
+                        :fallback fallback
+                        :readout readout)))
 
-(defmacro inspector:drawing ((&key fallback) &body body)
+(defmacro inspector:drawing ((&key fallback readout) &body body)
   "A drawing: whatever BODY draws with the canvas's functions -- LINE, BOX, DOT,
 HUE, the turtle -- on a canvas of its own, -100 to 100 each way.  Nothing goes
-to the real canvas.  FALLBACK is text to show where a drawing cannot be."
-  `(call-with-drawing (lambda () ,@body) ,fallback))
+to the real canvas.  FALLBACK is text to show where a drawing cannot be.
+
+READOUT, if given, is a function of x and y -- a point on the drawing, in the
+same units -- answering a string to show while the pointer is there: the value
+of the cell under it, the bin it is in.  NIL for a point with nothing to say."
+  `(call-with-drawing (lambda () ,@body) ,fallback ,readout))
+
+(defun drawing-readout (scene x y)
+  "What SCENE's drawing says about the point (X, Y), or NIL.  Never signals."
+  (let ((readout (and (drawing-scene-p scene) (drawing-scene-readout scene))))
+    (and readout
+         (handler-case (let ((text (funcall readout x y)))
+                         (and text (princ-to-string text)))
+           (error () nil)))))
 
 ;;; Options --------------------------------------------------------------------------
 
@@ -188,7 +263,7 @@ to the real canvas.  FALLBACK is text to show where a drawing cannot be."
     name))
 
 (defmacro inspector:define-view ((name &key title (type t) when (priority 0) options
-                                  properties)
+                                  objc-class thread requires properties)
                                  (object &rest lambda-list) &body body)
   "Contribute a view called NAME, for every object of TYPE -- a type specifier --
 for which WHEN, a function of the object, if given, is true.
@@ -205,23 +280,69 @@ scene: INSPECTOR:TABLE, TEXT, DRAWING, STACK or SECTION.  It draws nothing.
       (inspector:drawing () ...))
 
 Among the views that apply to an object, a higher PRIORITY comes first, then a
-more specific TYPE.  The first two are the ones an inspector opens on."
+more specific TYPE.  The first two are the ones an inspector opens on.
+
+For Objective-C data, OBJC-CLASS names a class instead of TYPE: the view then
+applies to an object of that class or a subclass, wrapped with INSPECTOR:OBJC,
+and is given the wrapper -- INSPECTOR:OBJC-POINTER is the pointer.  Such a view
+is run on the main thread, where AppKit and UIKit want their objects touched.
+REQUIRES is a list of what the front end must be able to show for the view to
+apply at all: (:appkit) for a view that answers an NSView."
   (let ((docstring (and (stringp (first body)) (rest body) (first body))))
     `(register-view ',name
                     :title ,(or title (string-capitalize (substitute #\Space #\- (string name))))
-                    :type ',type
-                    :when ,when
+                    :type ',(if objc-class 'objc-object type)
+                    :when ,(if objc-class
+                               `(let ((also ,when))
+                                  (lambda (object)
+                                    (and (objc-kind-of-p object ,objc-class)
+                                         (or (null also) (funcall also object)))))
+                               when)
                     :priority ,priority
                     :options (mapcar #'parse-view-option ',options)
-                    :properties (list ,@properties ,@(and docstring `(:documentation ,docstring)))
+                    :properties (list ,@properties
+                                      ,@(and objc-class `(:objc-class ,objc-class))
+                                      ,@(and thread `(:thread ,thread))
+                                      ,@(and requires `(:requires ',requires))
+                                      ,@(and docstring `(:documentation ,docstring)))
                     :function (lambda (,object ,@lambda-list)
                                 ,@body))))
 
+(defun view-supported-p (view)
+  "Whether this front end can show what VIEW needs."
+  (subsetp (getf (view-properties view) :requires) (inspector-capabilities)))
+
+(defun view-applicability (view object)
+  "Whether VIEW applies to OBJECT, and if it does not, why not, as a second
+value: a sentence for the list of every view there is."
+  (let ((class (getf (view-properties view) :objc-class))
+        (*print-pretty* nil))
+    (cond ((not (view-supported-p view))
+           (values nil (format nil "Needs ~{~(~a~)~^, ~}, which this is not."
+                               (getf (view-properties view) :requires))))
+          ((and class (not (objc-object-p object)))
+           (values nil (format nil "Needs an Objective-C ~a." class)))
+          ((not (ignore-errors (typep object (view-type view))))
+           (values nil (format nil "Needs ~(~s~)." (view-type view))))
+          ((and (view-when view)
+                (not (ignore-errors (funcall (view-when view) object))))
+           (values nil (if class
+                           (format nil "Needs an Objective-C ~a; this is ~:[something else~;~:*~a~]."
+                                   class (objc-class-name-of object))
+                           (format nil "Is ~(~s~), but the view's own test says no."
+                                   (view-type view)))))
+          (t (values t nil)))))
+
 (defun view-applies-p (view object)
-  (and (ignore-errors (typep object (view-type view)))
-       (or (null (view-when view))
-           (ignore-errors (funcall (view-when view) object)))
-       t))
+  (values (view-applicability view object)))
+
+(defun view-matches (view)
+  "What VIEW is matched by, to say in a list of views."
+  (let ((class (getf (view-properties view) :objc-class))
+        (*print-pretty* nil))
+    (cond (class (format nil "Objective-C ~a" class))
+          ((view-when view) (format nil "~(~s~), and a test" (view-type view)))
+          (t (format nil "~(~s~)" (view-type view))))))
 
 (defun view-more-specific-p (a b)
   "Whether view A's type is strictly inside view B's."
@@ -263,7 +384,9 @@ SETTINGS, a plist by keyword, or its default."
 scene that says so: a view is somebody else's code, run on a value it may not
 have expected, and the inspector's window is not where to find that out."
   (handler-case
-      (let ((scene (apply (view-function view) object (view-option-values view settings))))
+      (let ((scene (with-time-limit ()
+                     (apply (view-function view) object
+                            (view-option-values view settings)))))
         (if (scene-p scene)
             scene
             (inspector:text "The view ~a answered ~s, which is not a scene."
@@ -316,7 +439,8 @@ have expected, and the inspector's window is not where to find that out."
             (setf *contributors* (append *contributors* (list contributor))))))
     name))
 
-(defmacro inspector:define-controls ((name &key title (type t) when) (object) &body body)
+(defmacro inspector:define-controls ((name &key title (type t) when objc-class) (object)
+                                     &body body)
   "Contribute controls, called NAME, for every object of TYPE for which WHEN,
 if given, is true.  The body answers a list of them -- INSPECTOR:SLIDER, FIELD,
 TOGGLE, BUTTON -- each bound to a place:
@@ -329,8 +453,13 @@ A control changes the object, through its place, and every open view of the
 object is drawn again."
   `(register-controls ',name
                       :title ,(or title (string-capitalize (substitute #\Space #\- (string name))))
-                      :type ',type
-                      :when ,when
+                      :type ',(if objc-class 'objc-object type)
+                      :when ,(if objc-class
+                                 `(let ((also ,when))
+                                    (lambda (object)
+                                      (and (objc-kind-of-p object ,objc-class)
+                                           (or (null also) (funcall also object)))))
+                                 when)
                       :function (lambda (,object) ,@body)))
 
 (defun applicable-controls (object)
