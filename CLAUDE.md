@@ -397,7 +397,13 @@ NSTextView and UITextView share.
   captioned video, and `make demo` does both. A sheet is a window of its own, so
   it is composited in -- under the title bar, where a sheet hangs, not where its
   frame says -- and so is the canvas, which the demo parks over the listener's
-  lower right corner. `tools/make-gif.sh` cuts the README's `doc/canvas.gif`
+  lower right corner. An inspector's window is laid over the listener the same
+  way, with its All Views sheet composited into IT first, since a sheet is
+  placed against the window it hangs from. A table scrolled in a window that
+  is not key is photographed with its header drawn over its rows, so the
+  scene chooses rows already in sight. `doc/inspector-more.png` is two of its
+  frames; `doc/ios-inspector.png` is three iPhone screenshots from the
+  self-test. `tools/make-gif.sh` cuts the README's `doc/canvas.gif`
   out of the video by caption. CI makes it only on Run workflow
   (`workflow_dispatch`), arm64.
 - `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the

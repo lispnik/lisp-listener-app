@@ -181,6 +181,8 @@ type to add one of your own. A view that never finishes is stopped after five
 seconds (`lisp-listener::*inspector-time-limit*`) and its pane says so; the
 rest of the inspector carries on.
 
+![The pointer over a histogram says which bytes the bin holds and how many; All Views lists every view, the ones that do not apply greyed with what each needs, and what to type to add one](doc/inspector-more.png)
+
 **Anyone can contribute a view.** A view is matched by a type and, if that is
 not enough, a predicate; it is given the object and answers a *scene* — a
 table, some text, or a drawing made with the canvas's own functions. It draws
@@ -239,6 +241,8 @@ drawing is the pointer, **Views** lists every view and why the ones that do
 not apply do not, and a tap on a value printed in the transcript opens the
 inspector on it (while the keyboard is up, so that the tap which raises the
 keyboard does not).
+
+![On an iPhone: a list's elements with the selected row in the field at the foot, a histogram with a finger's readout, and the list of every view](doc/ios-inspector.png)
 
 ### Settings
 

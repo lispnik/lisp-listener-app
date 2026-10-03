@@ -30,8 +30,10 @@
 (defun demo-path (name)
   (namestring (merge-pathnames name *demo-directory*)))
 
-(defun demo-overlay (window-png panel window)
-  "Put PANEL -- a separate window -- into WINDOW-PNG where it sits on screen."
+(defun demo-overlay (window-png panel window &optional panel-png)
+  "Put PANEL -- a separate window -- into WINDOW-PNG where it sits on screen.
+PANEL-PNG, if given, is the picture of it to use: one with a sheet of its own
+already composited in."
   (let* ((scale (objc:invoke window "backingScaleFactor"))
          (wf (objc:invoke window "frame"))
          (pf (objc:invoke panel "frame"))
@@ -45,9 +47,10 @@
                                 (- (aref wf 3)
                                    (aref (objc:invoke window "contentLayoutRect") 3))
                                 (- (+ (aref wf 1) (aref wf 3)) (+ (aref pf 1) (aref pf 3)))))))
-         (panel-png (demo-path "panel.png")))
-    (write-window-png panel panel-png)
-    (uiop:run-program (list "magick" window-png panel-png
+         (written (or panel-png (demo-path "panel.png"))))
+    (unless panel-png
+      (write-window-png panel written))
+    (uiop:run-program (list "magick" window-png written
                             "-geometry" (format nil "+~d+~d" x y) "-composite" window-png)
                       :output nil :error-output t)))
 
@@ -68,7 +71,13 @@
       (let ((inspector-window (inspector-part inspector :window)))
         (when (and (live-pointer-p inspector-window)
                    (objc:invoke-bool inspector-window "isVisible"))
-          (demo-overlay path inspector-window window))))
+          ;; With its own sheet in it, if it has one up: a sheet is placed
+          ;; against the window it hangs from, so it goes into that first.
+          (let ((inspector-png (demo-path "inspector.png")))
+            (write-window-png inspector-window inspector-png)
+            (when (views-sheet-open-p inspector)
+              (demo-overlay inspector-png (inspector-part inspector :sheet) inspector-window))
+            (demo-overlay path inspector-window window inspector-png)))))
     ;; And so is Settings, which the demo likewise puts over the listener.
     (when (and (live-pointer-p *preferences-window*)
                (objc:invoke-bool *preferences-window* "isVisible"))
@@ -257,7 +266,44 @@ example's contributed view and controls."
                      (format nil "a histogram of ~d bins" bins))
         (pump 0.1d0)
         (demo-frame 0.45d0)))
-    (demo-frame 1.6d0))
+    (demo-frame 1.2d0)
+    ;; The pointer across the drawing: each bin says what it holds.
+    (demo-caption "Over a drawing, the pointer says what is under it")
+    (let* ((window (inspector-part inspector :window))
+           (drawing (getf (inspector-pane-parts inspector 0) :drawing))
+           (object (getf (inspector-pane-parts inspector 0) :drawing-object))
+           (bounds (objc:invoke drawing "bounds")))
+      (dolist (fraction '(0.18d0 0.3d0 0.42d0 0.55d0 0.68d0 0.8d0))
+        (let ((point (objc:invoke drawing "convertPoint:toView:"
+                                  (vector (* fraction (aref bounds 2)) (* 0.62d0 (aref bounds 3)))
+                                  nil))
+              (before (drawing-view-readout object)))
+          (objc:invoke drawing "mouseMoved:"
+                       (window-mouse-test-event window 5 (aref point 0) (aref point 1)))
+          (demo-expect (wait-for (lambda () (and (drawing-view-readout object)
+                                                 (not (equal before (drawing-view-readout object)))))
+                                 :timeout 10)
+                       "a readout")
+          (pump 0.05d0)
+          (demo-frame 0.6d0)))
+      (objc:invoke drawing "mouseExited:" (window-mouse-test-event window 5 0d0 0d0)))
+    ;; Every view there is, and why the ones that do not apply do not.
+    (demo-caption "All Views lists every view there is, and says why one does not apply")
+    (objc:invoke (inspector-part inspector :all-views-button) "performClick:" nil)
+    (demo-expect (wait-for (lambda () (views-sheet-open-p inspector)) :timeout 10) "the views sheet")
+    (pump-for 0.6d0)
+    (demo-frame 2.0d0)
+    (let ((table (inspector-part inspector :sheet-table)))
+      ;; Rows in sight: a table scrolled in a window that is not key is
+      ;; photographed with its header over the rows.
+      (dolist (title '("Cons" "Grid"))
+        (let ((row (views-sheet-row-of inspector title)))
+          (select-restart-row table row))
+        (pump 0.1d0)
+        (demo-frame 1.8d0)))
+    (hide-views-sheet inspector)
+    (pump-for 0.6d0)
+    (demo-frame 0.8d0))
   (hide-inspectors)
   (pump-for 0.3d0)
   (demo-caption "Anyone can contribute a view, and controls: this hot plate is forty lines")
