@@ -18,14 +18,14 @@
 ;;;; alive across an edit would be wrong about half the time.  Cheap enough:
 ;;;; one line of input, two one-character attribute writes.
 ;;;;
-;;;; CLEARING SWEEPS THE WHOLE TRANSCRIPT, not the ranges last marked -- see
-;;;; CLEAR-PAREN-HIGHLIGHT for the bug that taught it.  The view still records
-;;;; what it tinted, which is what a test asks about.
+;;;; CLEARING SWEEPS THE WHOLE INPUT REGION, not only the ranges last marked --
+;;;; see CLEAR-PAREN-HIGHLIGHT for the bug that taught it -- and not the whole
+;;;; transcript, which shook it on iOS.
 
 (in-package #:lisp-listener)
 
 (defun clear-paren-highlight (view pointer)
-  "Remove the tint from the WHOLE transcript.  Thread 1.
+  "Remove the tint from the whole INPUT REGION, and any range marked.  Thread 1.
 
 Not just from the ranges last marked, and that is the fix for a bug worth
 remembering: a text view sets its typing attributes from the character at the
@@ -36,11 +36,23 @@ carried the colour up into the transcript for good.
 
 One message over one range, and nothing else in the transcript uses a
 background colour, so there is nothing to preserve."
-  (let ((length (transcript-length pointer)))
-    (when (and length (plusp length))
+  (let ((length (transcript-length pointer))
+        (start (or (view-input-start view) 0)))
+    ;; From the input region only, and the ranges marked: the tint is never
+    ;; anywhere else -- the transcript gets text only through TRANSCRIPT-INSERT
+    ;; and SUBMIT-INPUT, which both clear first.  Sweeping the WHOLE storage
+    ;; on every keystroke made UIKit lay out the whole transcript again, and
+    ;; with the caret on the bottom line the scroll position jumped about by
+    ;; screenfuls while typing.
+    (when (and length (< start length))
       (objc:invoke (transcript-storage pointer) "removeAttribute:range:"
                    (%ns-string-constant "NSBackgroundColorAttributeName")
-                   (cons 0 length))))
+                   (cons start (- length start))))
+    (dolist (range (view-paren-marks view))
+      (when (and length (< (car range) start) (<= (+ (car range) (cdr range)) length))
+        (objc:invoke (transcript-storage pointer) "removeAttribute:range:"
+                     (%ns-string-constant "NSBackgroundColorAttributeName")
+                     range))))
   (setf (view-paren-marks view) '())
   view)
 

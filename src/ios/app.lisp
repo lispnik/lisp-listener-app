@@ -266,6 +266,48 @@ delegate at all, so it walked straight past the hook this is here to test."
              (objc:invoke pointer "insertText:" (string character))))
   text)
 
+(defvar *scroll-samples* '()
+  "The transcript's vertical scroll offset, sampled while typing at the bottom
+line, newest first.")
+
+(defvar *typing-done* nil)
+
+(defun type-slowly-and-sample (listener text)
+  "Type TEXT a character every 60 ms, as a person might, and meanwhile sample
+the transcript's scroll offset every 10 ms -- which is what jitter would show
+up in: an offset that goes back and forth while nothing is scrolled."
+  (let* ((pointer (listener-view listener))
+         (remaining (coerce text 'list))
+         (sampler nil))
+    (setf *scroll-samples* '() *typing-done* nil)
+    (setf sampler
+          (uikit:after-every 0.01d0
+                             (lambda (timer)
+                               (declare (ignore timer))
+                               (push (aref (objc:invoke pointer "contentOffset") 1)
+                                     *scroll-samples*))))
+    (uikit:after-every 0.06d0
+                       (lambda (timer)
+                         (if remaining
+                             (type-into-view pointer (string (pop remaining)))
+                             (progn
+                               (objc:invoke timer "invalidate")
+                               ;; A moment more, for whatever settles late.
+                               (uikit:after-every 0.5d0
+                                                  (lambda (late)
+                                                    (objc:invoke late "invalidate")
+                                                    (objc:invoke sampler "invalidate")
+                                                    (setf *typing-done* t))
+                                                  :repeats nil)))))
+    t))
+
+(defun scroll-jitter (samples)
+  "How far the offset went back up, in total, over SAMPLES, oldest first:
+typing at the bottom should only ever scroll down, or stay put."
+  (loop for (a b) on samples
+        while b
+        when (< b a) sum (- a b)))
+
 (defun type-line (listener text)
   (let ((view (listener-view-object listener))
         (pointer (listener-view listener)))
@@ -730,6 +772,24 @@ A step whose predicate has not held within its time fails."
              (unless *paredit-enabled* (error "paredit is still off"))
              (hide-settings-sheet))))
    (list "Settings is put away" (lambda () (not (settings-sheet-up-p))) nil)
+   ;; Typing on the bottom line must not shake the transcript.
+   (list "the transcript is filled past the bottom of the screen"
+         (lambda () (at-top-level-prompt-p listener))
+         (lambda () (type-line listener "(dotimes (i 60) (print i))")))
+   (list "a form is typed on the bottom line, a key at a time"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (search (format nil "~%59") (self-test-text listener))))
+         (lambda () (type-slowly-and-sample listener "(list 1 2 3 (+ 4 5) \"six\" 7)")))
+   (list "and the transcript does not jump about while it is"
+         (lambda () *typing-done*)
+         (lambda ()
+           (let* ((samples (reverse *scroll-samples*))
+                  (jitter (scroll-jitter samples)))
+             (note "selftest: ~d scroll samples, from ~,1f to ~,1f, back up ~,1f points in all"
+                   (length samples) (first samples) (first (last samples)) jitter)
+             (replace-pending-input (listener-view-object listener) (listener-view listener) "")
+             (when (> jitter 2)
+               (error "the transcript went back up ~,1f points while typing" jitter)))))
    ;; The line over the keys says what the call being typed takes.
    (list "a function is defined, to be described" (lambda () (at-top-level-prompt-p listener))
          (lambda ()

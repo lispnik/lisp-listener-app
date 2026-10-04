@@ -675,7 +675,9 @@ the file they are written to."
     (check-step (submit-and-wait listener
                                  (format nil "(download \"file://~a\" \"~a\")"
                                          (namestring source) (namestring target))
-                                 "fetched.txt")
+                                 ;; Not "fetched.txt", which the form typed
+                                 ;; has in it: that was a race, lost on Intel.
+                                 "#P\"")
                 "(download url) answers where it put the file")
     (check-step (and (probe-file target)
                      (equal "fetched, not typed" (uiop:read-file-line target)))

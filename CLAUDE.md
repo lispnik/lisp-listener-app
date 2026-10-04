@@ -853,8 +853,12 @@ Each of these is a bug that actually happened here.
   them coloured: typing `(room` coloured `room`, and submitting carried the
   colour up into the read-only transcript for good.
   `clear-paren-highlight` therefore sweeps `NSBackgroundColorAttributeName` off
-  the **whole transcript**, and both front ends reset the typing attributes as
-  the caret moves. `submit-input` and `transcript-insert` clear before they
+  the **whole input region**, and both front ends reset the typing attributes as
+  the caret moves. NOT the whole transcript, which it once did: an attribute
+  changed over all of the storage on every keystroke made UIKit lay the whole
+  transcript out again, and with the caret on the bottom line the view jumped
+  by screenfuls while typing -- 3,213 points back up over 31 keys, measured by
+  the iOS self-test, which now samples the offset every 10 ms while it types. `submit-input` and `transcript-insert` clear before they
   touch the text, while the ranges still mean something.
 
 - **The paren tint has to be re-applied, not preserved.** `replace-pending-input`
