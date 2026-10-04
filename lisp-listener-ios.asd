@@ -65,6 +65,11 @@
   ;; An asset catalogue, compiled by actool.  Its icon is 1024x1024 and has no
   ;; alpha channel, both of which iOS requires.
   :bundle-icon "res/LispListener.xcassets"
+  ;; ASDF, ECL's own, built for the device by the toolchain and linked in, so
+  ;; that a system copied into the app's folder can be loaded with its
+  ;; dependencies.  Compiled there, it is bytecode -- a phone has no C
+  ;; compiler -- cached in Documents/.cache/common-lisp/.
+  :bundle-ecl-modules ("asdf")
   :code-signing-identity #.(or (uiop:getenv "IOS_SIGNING_IDENTITY") :automatic)
   :development-team #.(uiop:getenv "IOS_DEVELOPMENT_TEAM")
   :provisioning-profile #.(uiop:getenv "IOS_PROVISIONING_PROFILE"))

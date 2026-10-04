@@ -420,6 +420,14 @@ so a file put there is `(load "name.lisp")` away, and a picture saved with
 `(save "name.png")` or a file fetched with `(download url)` is there to share.
 That folder is home, too: a relative pathname, and `~/`, both mean it.
 
+**Libraries load with ASDF.** Put a system's directory in the app's folder
+under `common-lisp/` — from the Files app, or with `(download …)` — and
+`(asdf:load-system "name")` finds it and what it depends on, each of which has
+to be there too. It is compiled once, to ECL's bytecode (a phone has no C
+compiler), into a hidden `.cache` in the same folder, and loaded from there
+afterwards. Bytecode is slower than the app's own compiled code, so a library
+is fine for convenience and less so for a tight loop.
+
 `(inspect (inspector:objc (uikit:key-window)))` inspects the window itself: a
 picture of it as it is drawn, and its subviews, each one to walk into and see.
 
@@ -567,6 +575,8 @@ red — "no offenders" is also what an empty scan says.
 - Interrupting with ⌘. a form that is blocked inside a foreign call takes
   effect when the call returns, which is the ordinary SBCL caveat.
 - There is no editor integration. It is a Listener.
+- On iOS, a library loaded with ASDF runs as bytecode: there is no compiler to
+  native code on a phone.
 
 ## Privacy
 

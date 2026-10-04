@@ -66,9 +66,13 @@ target the listener thread hops to, and only then the thread."
       ;; The banner was written before there was anywhere to put it.
       (force-output (listener-output listener))
       (objc:invoke pointer "becomeFirstResponder")
-      (let ((test (getenv "LISP_LISTENER_SELF_TEST")))
-        (when test
-          (start-self-test listener (or (ignore-errors (parse-integer test)) 0)))))
+      (let ((test (getenv "LISP_LISTENER_SELF_TEST"))
+            (store (getenv "LISP_LISTENER_STORE_SHOTS")))
+        (cond (store
+               (start-self-test listener (or (ignore-errors (parse-integer store)) 6)
+                                (build-store-steps listener)))
+              (test
+               (start-self-test listener (or (ignore-errors (parse-integer test)) 0))))))
     listener))
 
 (defun current-listener ()
@@ -772,6 +776,30 @@ A step whose predicate has not held within its time fails."
              (unless *paredit-enabled* (error "paredit is still off"))
              (hide-settings-sheet))))
    (list "Settings is put away" (lambda () (not (settings-sheet-up-p))) nil)
+   ;; ASDF: a system put in the app's folder, under common-lisp/, is found and
+   ;; loaded with what it depends on -- compiled there, to bytecode.
+   (list "a system is put in the app's folder" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (let ((directory (merge-pathnames "common-lisp/hello-asdf/" (history-directory))))
+             (ensure-directories-exist directory)
+             (with-open-file (out (merge-pathnames "hello-asdf.asd" directory)
+                                  :direction :output :if-exists :supersede)
+               (write-string "(defsystem \"hello-asdf\" :components ((:file \"package\") (:file \"hello\" :depends-on (\"package\"))))" out))
+             (with-open-file (out (merge-pathnames "package.lisp" directory)
+                                  :direction :output :if-exists :supersede)
+               (write-string "(defpackage #:hello-asdf (:use #:cl) (:export #:hello))" out))
+             (with-open-file (out (merge-pathnames "hello.lisp" directory)
+                                  :direction :output :if-exists :supersede)
+               (write-string "(in-package #:hello-asdf) (defun hello () (format nil \"Hello from ~a\" (lisp-implementation-type)))" out)))
+           (type-line listener "(asdf:load-system \"hello-asdf\")")))
+   (list "and ASDF finds it, compiles it and loads it"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (search "(asdf:load-system" (self-test-text listener))))
+         (lambda () (type-line listener "(hello-asdf:hello)")))
+   (list "so that what it defines is there"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (search "\"Hello from ECL\"" (self-test-text listener))))
+         nil)
    ;; Typing on the bottom line must not shake the transcript.
    (list "the transcript is filled past the bottom of the screen"
          (lambda () (at-top-level-prompt-p listener))
@@ -1195,8 +1223,102 @@ A step whose predicate has not held within its time fails."
                   (at-top-level-prompt-p listener))))
          nil)))
 
-(defun start-self-test (listener hold)
-  (setf *self-test* (make-self-test listener hold (build-self-test-steps listener)))
+;;; The App Store's screenshots ----------------------------------------------------
+;;;
+;;; LISP_LISTENER_STORE_SHOTS=<seconds> plays a short, clean session instead of
+;;; the self-test -- nothing in it a simulator's paths would spoil -- and logs
+;;; `storeshot: NAME' when each screen is ready, holding it for that many
+;;; seconds.  tools/store-shots.sh photographs each one as it is announced.
+;;; The steps are the self-test's kind, and run by the same ticker.
+
+(defun store-shot (name)
+  (list (format nil "the ~a screen" name) (constantly t)
+        (lambda () (note "storeshot: ~a" name))))
+
+(defvar *store-font-size* nil
+  "The size of the type before the store session made it bigger, to put back.")
+
+(defun build-store-steps (listener)
+  (let ((view (listener-view-object listener))
+        (pointer (listener-view listener)))
+    (flet ((typed (line)
+             (list (format nil "~a is typed" line)
+                   (lambda () (at-top-level-prompt-p listener))
+                   (lambda () (type-line listener line)))))
+      (list
+       (list "the listener prompts" (lambda () (at-top-level-prompt-p listener))
+             (lambda ()
+               ;; Type to suit the screen: an iPad's 13 inches made the
+               ;; phone's size look like small print.
+               (setf *store-font-size* *font-size*)
+               (when (canvas-docks-p)
+                 (setf (preference :font-size) 22))
+               (clear-transcript listener)))
+       ;; A session, and a call half typed, with what it takes over the keys.
+       (typed "(defun greet (name) (format nil \"Hello, ~a!\" name))")
+       (typed "(greet \"Lisp\")")
+       (typed "(mapcar #'greet '(\"iPhone\" \"iPad\"))")
+       (typed "(loop for i from 1 to 12 collect (* i i))")
+       (typed "(expt 2 100)")
+       (list "a call is begun" (lambda () (at-top-level-prompt-p listener))
+             (lambda ()
+               (replace-pending-input view pointer "(reduce #'+ ")
+               (objc:invoke pointer "setSelectedRange:" (cons (transcript-length pointer) 0))
+               (refresh-arglist-hint view pointer)))
+       (store-shot "session")
+       (list :hold nil nil)
+       ;; The canvas.
+       (list "a drawing" (constantly t)
+             (lambda ()
+               (replace-pending-input view pointer "")
+               (type-line listener "(example \"rose\")")))
+       (list "is painted" (lambda () (and (canvas-visible-p) (at-top-level-prompt-p listener)))
+             nil)
+       (store-shot "canvas")
+       (list :hold nil nil)
+       (list "put away" (constantly t) (lambda () (hide-canvas)))
+       ;; The debugger.
+       (list "an error" (lambda () (and (not (canvas-visible-p))
+                                        (at-top-level-prompt-p listener)))
+             (lambda () (type-line listener "(greet)")))
+       (list "opens the restarts" (lambda () (restarts-panel-visible-p listener)) nil)
+       (store-shot "debugger")
+       (list :hold nil nil)
+       (list "left" (constantly t) (lambda () (cancel-to-top-level listener)))
+       ;; The inspector, with a finger on the histogram.
+       (list "a vector is inspected"
+             (lambda () (and (not (restarts-panel-visible-p listener))
+                             (at-top-level-prompt-p listener)))
+             (lambda ()
+               (type-line listener
+                          "(inspect (coerce (loop for i below 512 collect (mod (* i i) 251)) '(vector (unsigned-byte 8))))")))
+       (list "and touched" (lambda () (and (inspector-sheet-up-p) (inspector-model *inspector-shown*)
+                                           (pane-model-drawing (sheet-pane-model *inspector-shown*))))
+             (lambda ()
+               (let* ((inspector *inspector-shown*)
+                      (bounds (objc:invoke (inspector-part inspector :drawing) "bounds")))
+                 (inspector-drawing-touch inspector :move (* 0.62d0 (aref bounds 2))
+                                          (* 0.55d0 (aref bounds 3))))))
+       (list "says what is there"
+             (lambda () (drawing-view-readout (inspector-part *inspector-shown* :drawing-object)))
+             nil)
+       (store-shot "inspector")
+       (list :hold nil nil)
+       (list "put away" (constantly t) (lambda () (hide-inspector)))
+       ;; The examples.
+       (list "Try" (lambda () (and (null *inspectors*) (at-top-level-prompt-p listener)))
+             (lambda () (open-examples-popup listener)))
+       (list "lists the examples" (lambda () (history-popup-visible-p listener)) nil)
+       (store-shot "examples")
+       (list :hold nil nil)
+       (list "put away" (constantly t)
+             (lambda ()
+               (hide-history-popup listener)
+               (when *store-font-size*
+                 (setf (preference :font-size) *store-font-size*))))))))
+
+(defun start-self-test (listener hold &optional (steps (build-self-test-steps listener)))
+  (setf *self-test* (make-self-test listener hold steps))
   (setf (self-test-timer *self-test*)
         (uikit:after-every 0.2d0 (lambda (timer)
                                    (declare (ignore timer))

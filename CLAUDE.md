@@ -798,6 +798,15 @@ Each of these is a bug that actually happened here.
   `*retired-sheet-controllers*`, because a table holds its data source
   weakly) and answers a blank cell for a row it no longer has.
 
+- **ASDF on iOS is ECL's own, linked in** (`:bundle-ecl-modules ("asdf")` in
+  `lisp-listener-ios.asd`; asdf-ios-app builds it for the device). Home is the
+  app's Documents folder, so ASDF's default source registry finds
+  `Documents/common-lisp/` and its output cache is `Documents/.cache/`.
+  `compile-file` there is the bytecodes compiler, which asdf-ios-app installs
+  at boot, and writes `.fasc` files. The self-test writes a two-file system
+  into `common-lisp/hello-asdf/` and loads it. `getenv` in `impl.lisp` still
+  does not use UIOP, as UIOP is not there before ASDF is.
+
 - **ECL's `inspect` answers its argument.** SBCL's answers nothing. So on iOS
   `(inspect bytes)` opened the inspector and then printed all 256 bytes under
   the prompt. `inspect-object` notes what it was called on in `*inspected*`,
