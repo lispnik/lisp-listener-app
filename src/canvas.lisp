@@ -762,7 +762,7 @@ the reader merely interned -- typed once, never defined -- is replaced."
                      (t (push symbol skipped))))))
       (do-external-symbols (symbol (find-package "CANVAS"))
         (bring symbol))
-      (dolist (symbol '(examples example example-source example-edit))
+      (dolist (symbol '(examples example example-source example-edit download))
         (bring symbol)))
     (when skipped
       (note "canvas: ~{~a~^, ~} already had a meaning in ~a; write CANVAS:~a there"

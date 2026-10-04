@@ -40,6 +40,7 @@
    #:paredit-key
    #:*paredit-commands*
    #:*paren-highlight-enabled*
+   #:*arglist-hints-enabled*
    #:*history-popup-rows*
    #:open-history-popup
    #:*restarts-panel-enabled*
@@ -52,7 +53,11 @@
    #:example-source
    #:example-edit
    ;; Settings, kept between launches.
-   #:preference))
+   #:preference
+   ;; A file from the network, into your own folder.
+   #:download
+   ;; The file that is loaded at every launch.
+   #:init-file))
 
 ;;; CANVAS is the other package, and it holds nothing but names: the drawing
 ;;; vocabulary a person types at the prompt.  It uses nothing, so that LINE and

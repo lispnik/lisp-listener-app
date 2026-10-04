@@ -1,4 +1,5 @@
-;;;; src/macos/preferences-window.lisp -- Settings: five switches and a size.
+;;;; src/macos/preferences-window.lisp -- Settings: six switches, a size, and
+;;;; the way to init.lisp.
 ;;;;
 ;;;; The Mac's window onto src/preferences.lisp.  Each control changes its
 ;;;; setting at once, through (SETF PREFERENCE), which is also what saves it;
@@ -17,6 +18,7 @@
 (defparameter *preference-switches*
   '((:paredit "Balance parentheses and quotes as they are typed")
     (:paren-highlight "Tint the parenthesis at the caret and its partner")
+    (:arglist-hints "Show what the call being typed takes, under the title")
     (:auto-indent "Indent the new line that Option-Return starts")
     (:debugger-pane "Dock the debugger under the transcript")
     (:reopen-windows "Reopen windows where they were"))
@@ -65,8 +67,24 @@ pop-up under :FONT-SIZE.  Each is retained by its superview.")
           (setf (preference :font-size) size)))
     (error (condition) (note "preferenceFontSize: ~a" condition))))
 
+;;; init.lisp opens in whatever edits Lisp here, or in TextEdit when nothing
+;;; claims the type; made first, with a few lines saying what it is for.
+(defun open-init-file ()
+  "Open init.lisp in an editor, making it if there is none.  Thread 1."
+  (let* ((path (namestring (init-file)))
+         (url (objc:invoke "NSURL" "fileURLWithPath:" path))
+         (workspace (objc:invoke "NSWorkspace" "sharedWorkspace")))
+    (or (objc:invoke-bool workspace "openURL:" url)
+        (objc:invoke-bool workspace "openFile:withApplication:" path "TextEdit"))))
+
+(objc:define-objc-method ("preferenceEditInitFile:" :void)
+    ((self preferences-controller) (sender objc:objc-object-pointer))
+  (declare (ignorable sender))
+  (handler-case (open-init-file)
+    (error (condition) (note "preferenceEditInitFile: ~a" condition))))
+
 (defun build-preferences-window ()
-  (let* ((rows (1+ (length *preference-switches*)))
+  (let* ((rows (+ 2 (length *preference-switches*)))
          (width *preferences-width*)
          (height (+ (* 2 *preferences-margin*) (* rows *preferences-row*)))
          (controller (make-instance 'preferences-controller))
@@ -105,6 +123,14 @@ pop-up under :FONT-SIZE.  Each is retained by its superview.")
       (push (cons :font-size popup) *preference-controls*)
       ;; -addSubview: retains it; the +1 from -alloc is ours to drop.
       (objc:release popup))
+    (decf y *preferences-row*)
+    ;; And everything Settings has no control for.
+    (let ((button (objc:invoke "NSButton" "buttonWithTitle:target:action:"
+                               "Edit init.lisp…" target
+                               (objc:coerce-to-selector "preferenceEditInitFile:"))))
+      (objc:invoke button "setFrame:" (vector (- *preferences-margin* 6d0) (- y 4d0) 150d0 28d0))
+      (objc:invoke content "addSubview:" button)
+      (push (cons :init-file button) *preference-controls*))
     (objc:invoke window "center")
     (setf *preferences-controller* controller
           *preferences-window* window)))
@@ -113,6 +139,7 @@ pop-up under :FONT-SIZE.  Each is retained by its superview.")
   "Make the controls say what is in force.  Nothing to do with no window."
   (when (live-pointer-p *preferences-window*)
     (loop for (key . control) in *preference-controls*
+          unless (eq key :init-file)
           do (if (eq key :font-size)
                  (let ((title (font-size-title (preference :font-size))))
                    ;; A size init.lisp or ⌘+ chose need not be one on the list.

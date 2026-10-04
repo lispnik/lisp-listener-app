@@ -19,11 +19,42 @@
   "What LOAD-INIT-FILE did, for the transcript to report: NIL, :NONE, :LOADED,
 or (:FAILED . report).")
 
-(defun init-file ()
+(defun init-file-path ()
+  "Where init.lisp is, whether or not it is there; NIL with no directory."
   (ignore-errors
    (let ((directory (or *history-directory* (history-directory))))
      (when directory
        (merge-pathnames "init.lisp" directory)))))
+
+(defparameter *init-file-template*
+  ";;;; init.lisp -- loaded each time Lisp Listener starts, before the first prompt.
+;;;;
+;;;; Read in the LISP-LISTENER package, which is where the settings are.  A
+;;;; form that signals is reported in the transcript, and the listener starts
+;;;; anyway.  For example:
+;;;;
+;;;;   (setf (preference :font-size) 15)          ; what Settings sets, too
+;;;;   (setf (paredit-key \"C-(\") 'slurp-backward)  ; rebind a paredit key
+;;;;   (setf *paren-highlight-enabled* nil)
+;;;;
+;;;; And anything else you want in every session -- in your own package:
+;;;;
+;;;;   (in-package :cl-user)
+;;;;   (defun square (x) (* x x))
+
+"
+  "What a new init.lisp says: how it is read, and what it might hold.")
+
+(defun lisp-listener:init-file ()
+  "The pathname of init.lisp -- the file loaded each time the listener starts --
+made, with a few lines saying what it is for, if there is none yet."
+  (let ((path (or (init-file-path) (error "There is no directory to keep init.lisp in."))))
+    (unless (probe-file path)
+      (ensure-directories-exist path)
+      (with-open-file (out path :direction :output :if-does-not-exist :create
+                                :external-format :utf-8)
+        (write-string *init-file-template* out)))
+    path))
 
 (defun load-init-file ()
   "Load init.lisp, if there is one.  Returns what happened, and never signals.
@@ -31,7 +62,7 @@ or (:FAILED . report).")
 Read in this package, because that is what it will be setting: *PAREDIT-KEYS*,
 *PAREDIT-ENABLED*, *FONT-SIZE*.  A file may say (in-package ...) itself."
   (setf *init-file-loaded*
-        (let ((path (init-file)))
+        (let ((path (init-file-path)))
           (cond
             ((null path) :none)
             ((not (probe-file path)) :none)

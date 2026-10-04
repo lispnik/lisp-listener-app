@@ -203,6 +203,10 @@ what a game wants; without, it comes forward and the prompt keeps the keys."
 Not the Desktop or Documents, which macOS asks permission for."
   (merge-pathnames "Pictures/" (user-homedir-pathname)))
 
+(defun download-directory ()
+  "Where (download url) puts a file that names no directory: ~/Downloads."
+  (merge-pathnames "Downloads/" (user-homedir-pathname)))
+
 (defun save-canvas-png (path)
   "Write the canvas, as its view paints it, to PATH.  Thread 1.
 

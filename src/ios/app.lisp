@@ -16,6 +16,12 @@ target the listener thread hops to, and only then the thread."
   ;; asdf-ios-app copies standard output into the app's Documents/console.log,
   ;; which is the one place a failure here can be read back from.
   (setf *log* *standard-output*)
+  ;; A relative pathname -- (load "x.lisp"), (with-open-file (s "notes.txt"))
+  ;; -- is the app's folder's, which is the only one it may write, and the one
+  ;; the Files app shows.  Left alone it is the working directory, which is /.
+  (let ((home (history-directory)))
+    (when home
+      (setf *default-pathname-defaults* home)))
   (objc:ensure-objc-initialized)
   (reset-transcript-attributes)
   ;; The canvas's names, in CL-USER before the init file, which may draw; and
@@ -226,6 +232,9 @@ package is the app's, and is not there when this file is compiled off a Mac."
 ;;; free to service.
 
 (defvar *self-test* nil)
+
+(defvar *self-test-saved-init* nil
+  "init.lisp as it was before the self-test edited it, to put back.")
 
 (defstruct (self-test (:constructor make-self-test (listener hold steps)))
   listener hold steps (started (get-internal-real-time)) timer (failures 0))
@@ -721,6 +730,112 @@ A step whose predicate has not held within its time fails."
              (unless *paredit-enabled* (error "paredit is still off"))
              (hide-settings-sheet))))
    (list "Settings is put away" (lambda () (not (settings-sheet-up-p))) nil)
+   ;; The line over the keys says what the call being typed takes.
+   (list "a function is defined, to be described" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (type-line listener "(defun hinted (alpha beta &optional gamma) (list alpha beta gamma))")))
+   (list "and typing a call to it says what it takes"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (search "HINTED" (self-test-text listener))))
+         (lambda ()
+           (let ((view (listener-view-object listener))
+                 (pointer (listener-view listener)))
+             ;; A function of the Lisp's own, whose lambda list ECL here can
+             ;; only have from what was recorded when the app was compiled.
+             (let ((builtin (arglist-hint "(mapcar " 8 (find-package "COMMON-LISP-USER"))))
+               (unless (equal builtin "(mapcar function list &rest more-lists)")
+                 (error "(mapcar is described as ~s" builtin)))
+             (replace-pending-input view pointer "(hinted 1 ")
+             (objc:invoke pointer "setSelectedRange:" (cons (transcript-length pointer) 0))
+             (refresh-arglist-hint view pointer)
+             (let ((shown (objc:ns-string-to-string
+                           (objc:invoke (view-hint-label view) "text"))))
+               (unless (equal shown "(hinted alpha beta &optional gamma)")
+                 (error "the line over the keys says ~s" shown))))))
+   (list :hold nil nil)
+   (list "and nothing once the input is gone" (constantly t)
+         (lambda ()
+           (let ((view (listener-view-object listener))
+                 (pointer (listener-view listener)))
+             (replace-pending-input view pointer "")
+             (refresh-arglist-hint view pointer)
+             (let ((shown (objc:ns-string-to-string
+                           (objc:invoke (view-hint-label view) "text"))))
+               (unless (equal shown "")
+                 (error "the line over the keys still says ~s" shown))))))
+   ;; Home is the app's folder: a relative pathname and ~ both mean it.
+   (list "the app's folder is home, to a relative pathname and to ~" (constantly t)
+         (lambda ()
+           (let ((home (namestring (history-directory))))
+             (note "selftest: HOME ~a, user-homedir ~a, defaults ~a"
+                   home (user-homedir-pathname) *default-pathname-defaults*)
+             (unless (equal home (namestring *default-pathname-defaults*))
+               (error "a relative pathname is under ~a" *default-pathname-defaults*))
+             (unless (equal home (namestring (user-homedir-pathname)))
+               (error "~~ is ~a" (user-homedir-pathname))))))
+   ;; (download url): a file:// URL, so that the test needs no network; the
+   ;; https:// path is the same call.
+   (list "(download url) fetches a file" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (let ((source (concatenate 'string (string-right-trim "/" (getenv "TMPDIR"))
+                                      "/download-source.txt")))
+             (with-open-file (out source :direction :output :if-exists :supersede)
+               (write-string "fetched, not typed" out))
+             (ignore-errors (delete-file (merge-pathnames "fetched.txt" (history-directory))))
+             (type-line listener (format nil "(download \"file://~a\" \"fetched.txt\")"
+                                         source)))))
+   (list "into the app's folder, where Files shows it"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (search "fetched.txt" (self-test-text listener))))
+         (lambda ()
+           (let ((path (merge-pathnames "fetched.txt" (history-directory))))
+             (unless (and (probe-file path)
+                          (with-open-file (in path)
+                            (equal (read-line in nil) "fetched, not typed")))
+               (error "~a is not what was fetched" path)))))
+   ;; init.lisp, edited from Settings and loaded at the prompt.  Put back as it
+   ;; was afterwards: a self-test on a phone is somebody's phone.
+   (list "Settings edits init.lisp" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (let ((path (init-file-path)))
+             (setf *self-test-saved-init*
+                   (and (probe-file path)
+                        (with-open-file (in path :external-format :utf-8)
+                          (let ((string (make-string (file-length in))))
+                            (subseq string 0 (read-sequence string in)))))))
+           (show-settings-sheet listener)
+           (let ((edit (settings-control :init-file)))
+             (unless (live-pointer-p edit) (error "Settings has no Edit for init.lisp"))
+             (objc:invoke edit "sendActionsForControlEvents:" 64))))
+   (list "in a sheet of its own" (lambda () (init-editor-up-p))
+         (lambda ()
+           (unless (search "init.lisp" (objc:ns-string-to-string
+                                        (objc:invoke *init-editor-text* "text")))
+             (error "the editor does not hold init.lisp"))
+           (objc:invoke *init-editor-text* "setText:"
+                        "(defparameter cl-user::*from-init* (* 6 7))")))
+   (list :hold nil nil)
+   (list "and Save and Load writes it and loads it at the prompt" (constantly t)
+         (lambda () (save-init-file-from-editor :load t)))
+   (list "which is in force at once, with nothing left on screen"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (boundp 'cl-user::*from-init*)
+                         (not (init-editor-up-p)) (not (settings-sheet-up-p))
+                         (not (live-pointer-p
+                               (objc:invoke (objc:invoke (objc:invoke (listener-view listener)
+                                                                      "window")
+                                                         "rootViewController")
+                                            "presentedViewController")))))
+         (lambda ()
+           (unless (eql 42 (symbol-value 'cl-user::*from-init*))
+             (error "*from-init* is ~a" (symbol-value 'cl-user::*from-init*)))
+           (let ((saved *self-test-saved-init*)
+                 (path (init-file-path)))
+             (if saved
+                 (with-open-file (out path :direction :output :if-exists :supersede
+                                           :external-format :utf-8)
+                   (write-string saved out))
+                 (delete-file path)))))
    ;; The inspector, as a sheet: a list's elements, changed from its foot.
    (list "(inspect x) at the prompt" (lambda () (at-top-level-prompt-p listener))
          (lambda () (type-line listener "(inspect (list :alpha :beta))")))
@@ -916,6 +1031,37 @@ A step whose predicate has not held within its time fails."
                (error "the native view is not in the sheet")))))
    (list :hold nil nil)
    (list "and is put away" (constantly t) (lambda () (hide-inspector)))
+   ;; A view of UIKit's own: the window, as it looks, and its subviews.
+   (list "the window is inspected" (lambda () (and (null *inspectors*)
+                                                   (at-top-level-prompt-p listener)))
+         (lambda () (type-line listener "(inspect (inspector:objc (uikit:key-window)))")))
+   (list "as a picture of itself, with its subviews to walk into"
+         (lambda ()
+           (let ((inspector *inspector-shown*))
+             (and inspector (inspector-sheet-up-p inspector) (inspector-model inspector)
+                  (equal "Picture" (pane-model-view-title (sheet-pane-model inspector))))))
+         (lambda ()
+           (let* ((inspector *inspector-shown*)
+                  (host (inspector-part inspector :native-host)))
+             (unless (= 1 (objc:invoke (objc:invoke host "subviews") "count"))
+               (error "there is no picture in the sheet"))
+             (unless (member "Subviews" (mapcar #'cdr (pane-model-choices
+                                                       (sheet-pane-model inspector)))
+                             :test #'string=)
+               (error "the window has no Subviews view"))
+             (inspector-select-view inspector 0 'ui-subviews-view))))
+   (list :hold nil nil)
+   (list "the subviews are rows, and a row walks into one"
+         (lambda () (let ((pane (sheet-pane-model *inspector-shown*)))
+                      (and (equal "Subviews" (pane-model-view-title pane))
+                           (pane-model-table pane)
+                           (plusp (table-model-count (pane-model-table pane))))))
+         (lambda () (inspector-open-row *inspector-shown* 0 0)))
+   (list "into a view of its own"
+         (lambda () (let ((inspector *inspector-shown*))
+                      (and (= 2 (length (model-path (inspector-model inspector))))
+                           (objc-object-p (inspector-object inspector)))))
+         (lambda () (hide-inspector)))
    (list "leaving no inspector"
          (lambda () (and (null *inspector-shown*) (null *inspectors*)
                          (at-top-level-prompt-p listener)))

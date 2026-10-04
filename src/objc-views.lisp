@@ -80,3 +80,29 @@ of itself."
     (object)
   "An NSString, as what it says."
   (inspector:text "~a" (objc:ns-string-to-string (inspector:objc-pointer object))))
+
+;;; A view's subviews, to walk down the hierarchy a row at a time.  Twice, once
+;;; for each toolkit's class: a class the platform has not got simply matches
+;;; nothing (OBJC-KIND-OF-P asks NSClassFromString, which answers nil).
+
+(defun subviews-scene (object)
+  (let ((subviews (objc:invoke (inspector:objc-pointer object) "subviews")))
+    (inspector:table
+     :columns '("Index" "Subview")
+     :count (objc:invoke subviews "count")
+     :row (lambda (index)
+            (let ((subview (objc:invoke subviews "objectAtIndex:" index)))
+              (list (format nil "[~d]" index)
+                    (inspector:value (objc-value subview)
+                                     (or (objc-class-name-of (objc-value subview))
+                                         (format nil "[~d]" index)))))))))
+
+(inspector:define-view (ns-subviews-view :title "Subviews" :objc-class "NSView" :priority 8)
+    (object)
+  "An NSView's subviews, each one to walk into."
+  (subviews-scene object))
+
+(inspector:define-view (ui-subviews-view :title "Subviews" :objc-class "UIView" :priority 8)
+    (object)
+  "A UIView's subviews, each one to walk into -- a window's included."
+  (subviews-scene object))

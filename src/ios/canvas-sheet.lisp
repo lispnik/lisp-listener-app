@@ -68,6 +68,11 @@ edge at the panel's left, retained.")
 own folder, which is in the Files app."
   (history-directory))
 
+(defun download-directory ()
+  "Where (download url) puts a file that names no directory: the app's folder
+too, which is the only one it may write."
+  (history-directory))
+
 ;;; The view ----------------------------------------------------------------------
 
 (objc:define-objc-class canvas-view ()

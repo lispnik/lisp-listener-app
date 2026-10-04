@@ -24,6 +24,7 @@ where they were.")
 (defparameter *preferences*
   '((:paredit *paredit-enabled* boolean)
     (:paren-highlight *paren-highlight-enabled* boolean)
+    (:arglist-hints *arglist-hints-enabled* boolean)
     (:auto-indent *auto-indent-enabled* boolean)
     (:debugger-pane *restarts-panel-enabled* boolean)
     (:reopen-windows *reopen-windows* boolean)
@@ -102,7 +103,8 @@ Answers how many it set.  Before init.lisp, which may then overrule it."
       nil)))
 
 (defun preference (key)
-  "The setting KEY -- :paredit, :paren-highlight, :auto-indent, :debugger-pane,
+  "The setting KEY -- :paredit, :paren-highlight, :arglist-hints, :auto-indent,
+:debugger-pane,
 :reopen-windows or :font-size.  SETF changes it, for good:
 
     (setf (lisp-listener:preference :font-size) 16)"
@@ -145,7 +147,8 @@ take the tint that is there away."
     (let ((view (listener-view-object listener))
           (pointer (listener-view listener)))
       (when (and view pointer)
-        (refresh-paren-highlight view pointer)))))
+        (refresh-paren-highlight view pointer)
+        (refresh-arglist-hint view pointer)))))
 
 ;;; The size of the type ----------------------------------------------------------
 

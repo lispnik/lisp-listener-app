@@ -33,7 +33,8 @@ USER-HOMEDIR-PATHNAME ignores HOME and asks the password database, which in the
 simulator answers the MAC\'s home directory: the history was read from and
 written to ~/Library on the development machine, and nothing appeared in the
 container at all.  Measured, once the simulator reported a history three lines
-long on a first run."
+long on a first run.  (In ECL 26.5.5 they agree; the self-test checks both, and
+IOS-START makes this *DEFAULT-PATHNAME-DEFAULTS* too.)"
   (let ((home (getenv "HOME")))
     (when home
       (pathname (concatenate 'string (string-right-trim "/" home) "/")))))
@@ -77,6 +78,9 @@ begins.  UTF-16 units, thread 1 only.")
    (history-index :initform nil :accessor view-history-index
                   :documentation "How far back RECALL-HISTORY has gone, or NIL
 while a fresh line is being typed.")
+   (hint-label :initform nil :accessor view-hint-label
+               :documentation "The line over the keys that says what the call
+being typed takes.  See src/arglist.lisp.")
    (tap-delegate :initform nil :accessor view-tap-delegate
                  :documentation "The tap recognizer's delegate, held here
 because a recognizer holds its delegate weakly.")
@@ -238,6 +242,7 @@ of it: the nearest position to a tap in the margin is still a position."
 ;;; The key bar -----------------------------------------------------------------
 
 (defparameter *key-bar-height* 44d0)
+(defparameter *hint-line-height* 20d0)
 
 (defun make-key-bar (object)
   "The row of keys above the on-screen keyboard: Tab, Esc, the arrows, Hist,
@@ -249,16 +254,28 @@ keyboard from its frame's height, and stretched across from its autoresizing
 mask."
   (let ((bar (objc:invoke (objc:invoke "UIInputView" "alloc")
                           "initWithFrame:inputViewStyle:"
-                          (vector 0d0 0d0 0d0 *key-bar-height*)
+                          (vector 0d0 0d0 0d0 (+ *key-bar-height* *hint-line-height*))
                           0))                   ; UIInputViewStyleDefault
+        (hint (uikit:new "UILabel"))
         (stack (uikit:new "UIStackView")))
     (objc:invoke bar "setAutoresizingMask:" +ui-view-flexible-width+)
+    ;; Over the keys, a line for what the call being typed takes; empty while
+    ;; there is nothing to say.
+    (objc:invoke hint "setFont:" (uikit:mono-font 12))
+    (objc:invoke hint "setTextColor:" (objc:invoke "UIColor" "secondaryLabelColor"))
+    (objc:invoke hint "setLineBreakMode:" 4)      ; truncating tail
+    (objc:invoke bar "addSubview:" hint)
+    (uikit:pin hint "leadingAnchor" bar "leadingAnchor" 10)
+    (uikit:pin hint "trailingAnchor" bar "trailingAnchor" -10)
+    (uikit:pin hint "topAnchor" bar "topAnchor" 2)
+    (uikit:fix hint "heightAnchor" (- *hint-line-height* 2))
+    (setf (view-hint-label object) hint)
     (objc:invoke stack "setAxis:" 0)              ; horizontal
     (objc:invoke stack "setDistribution:" 1)      ; fill equally
     (objc:invoke bar "addSubview:" stack)
     (uikit:pin stack "leadingAnchor" bar "leadingAnchor" 4)
     (uikit:pin stack "trailingAnchor" bar "trailingAnchor" -4)
-    (uikit:pin stack "topAnchor" bar "topAnchor")
+    (uikit:pin stack "topAnchor" hint "bottomAnchor")
     (uikit:pin stack "bottomAnchor" bar "bottomAnchor")
     (flet ((key (title function)
              (let ((button (uikit:system-button title)))
@@ -569,4 +586,29 @@ key in that position on a keyboard attached to an iPad."
 (define-listener-method ("textViewDidChangeSelection:" :void)
     ((text-view objc:objc-object-pointer))
   (apply-typing-attributes pointer)
-  (refresh-paren-highlight self pointer))
+  (refresh-paren-highlight self pointer)
+  (refresh-arglist-hint self pointer))
+
+;;; What the call being typed takes, on the line over the keys, the argument
+;;; at the caret in bold and tinted.  See src/arglist.lisp.
+
+(defun show-arglist-hint (listener hint start end)
+  (let* ((object (listener-view-object listener))
+         (label (and object (view-hint-label object))))
+    (when (live-pointer-p label)
+      (if (null hint)
+          (objc:invoke label "setText:" "")
+          (let ((text (objc:invoke (objc:invoke "NSMutableAttributedString" "alloc")
+                                   "initWithString:" hint)))
+            (when (and start end)
+              (let ((range (cons (utf-16-length (subseq hint 0 start))
+                                 (utf-16-length (subseq hint start end)))))
+                (objc:invoke text "addAttribute:value:range:"
+                             (%ns-string-constant "NSFontAttributeName")
+                             (uikit:mono-font 12 0.4) range)
+                (objc:invoke text "addAttribute:value:range:"
+                             (%ns-string-constant "NSForegroundColorAttributeName")
+                             (objc:invoke "UIColor" "labelColor") range)))
+            (objc:invoke label "setAttributedText:" text)
+            (objc:release text))))
+    t))

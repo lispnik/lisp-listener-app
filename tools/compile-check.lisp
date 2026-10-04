@@ -43,7 +43,7 @@
 ;;; The orders are lisp-listener.asd's, which are :SERIAL.
 (defparameter *core*
   '("package" "impl" "main-thread" "queue" "listener" "history" "sexp" "paredit"
-    "keymap" "indent" "transcript" "completion" "paren-highlight" "paredit-view" "history-search"
+    "keymap" "indent" "transcript" "completion" "paren-highlight" "arglist" "paredit-view" "history-search"
     "streams" "config"
     "restarts" "preferences" "files" "canvas" "places" "views" "inspector"
     "standard-views" "objc-views" "examples" "repl"))

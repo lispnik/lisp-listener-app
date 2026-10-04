@@ -136,7 +136,7 @@ Three systems in `lisp-listener.asd`, each `:serial t`, and **the component
 order is load-bearing**:
 
 - `lisp-listener/core` — `src/`: `package impl main-thread queue listener history
-  sexp paredit keymap indent transcript completion paren-highlight paredit-view
+  sexp paredit keymap indent transcript completion paren-highlight arglist paredit-view
   history-search streams config restarts preferences files canvas places views
   inspector standard-views objc-views examples repl`. No toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
@@ -198,8 +198,27 @@ NSTextView and UITextView share.
   `CL-USER> `, so its columns are not its offsets.
 - `src/paren-highlight.lisp` — the tint under the caret's paren and its partner,
   red when it has none. Input region only.
+- `src/arglist.lisp` — the hint: the lambda list of the innermost call around
+  the caret (`call-at`, which walks outward past a list that is no call, and
+  sees no call inside a string or comment), and which argument the caret is on
+  (`lambda-list-argument`; nothing past `&key`). Pure, `(text offset package)`,
+  so `make test` covers it. Printed without escapes, so without the
+  implementation's package prefixes. Lambda lists come from the live image,
+  from `*special-operator-arglists*`, and on iOS from `*recorded-arglists*`:
+  ECL reads CL's lambda lists from a help file at run time, which the app is
+  built without, so `recorded-cl-arglists` (`impl.lisp`) asks the compiling
+  ECL and compiles the answers in. `refresh-arglist-hint` runs on every
+  selection change and calls the front end's `show-arglist-hint` only when
+  something changed: the window's subtitle on the Mac (plain text, so the
+  argument is bracketed ‹ ›), a line over the key bar on iOS (attributed,
+  bold). `*arglist-hints-enabled*` is the `:arglist-hints` preference.
 - `src/config.lisp` — `init.lisp`, read from `history-directory` at startup, so a
   rebinding survives a launch. A broken one is reported, never fatal.
+  `init-file-path` is where it is; the exported `(init-file)` makes it from
+  `*init-file-template*` if it is missing, and is what Settings opens: Edit
+  init.lisp… on the Mac (`open-init-file`: NSWorkspace, then TextEdit), and an
+  editor sheet on iOS (`src/ios/settings-sheet.lisp`) whose Save and Load
+  types `(load "…")` at the prompt.
 - `src/history-search.lisp` — the history picker: ⌘R lists everything submitted,
   typing narrows it (every whitespace-separated term must appear, ignoring case),
   ↓ goes from the field into the list and ↑ from its top row back,
@@ -223,7 +242,10 @@ NSTextView and UITextView share.
   the history; nothing is loaded on thread 1. Save Transcript… is
   `save-transcript`. The panels are `src/macos/app.lisp`'s, the drop is the
   view's `-performDragOperation:`, which leaves anything not Lisp to the text
-  view.
+  view. `(download url)` is here too: Foundation's
+  `-dataWithContentsOfURL:` on the listener thread, into the front end's
+  `download-directory` (`~/Downloads`; the app's folder on iOS). Both tests use
+  a `file://` URL, so neither needs the network.
 - `src/preferences.lisp` — the settings a window can change, and what the
   application remembers for itself (where its windows were), in one plist,
   `preferences.lisp-expr`, beside the history: read with `*read-eval*` off,

@@ -657,8 +657,36 @@ the file they are written to."
       (pump 0.1d0)
       (check-step (= (transcript-point-size listener) before)
                   "choosing a size in the pop-up sets the type in it")))
+  ;; Not pressed: it opens the file in another application.
+  (let ((button (preference-control :init-file)))
+    (check-step (and (live-pointer-p button)
+                     (cffi:pointer-eq (objc:invoke button "action")
+                                      (objc:coerce-to-selector "preferenceEditInitFile:")))
+                "Settings has Edit init.lisp…, wired to open the file"))
   (hide-preferences-window)
-  (check-step (not (objc:invoke-bool *preferences-window* "isVisible")) "Settings closes"))
+  (check-step (not (objc:invoke-bool *preferences-window* "isVisible")) "Settings closes")
+  ;; (download url), from a file:// URL so as to need no network, and into the
+  ;; run's own directory rather than the person's Downloads.
+  (let* ((directory (uiop:ensure-directory-pathname directory))
+         (source (merge-pathnames "download-source.txt" directory))
+         (target (merge-pathnames "fetched.txt" directory)))
+    (with-open-file (out source :direction :output :if-exists :supersede)
+      (write-string "fetched, not typed" out))
+    (check-step (submit-and-wait listener
+                                 (format nil "(download \"file://~a\" \"~a\")"
+                                         (namestring source) (namestring target))
+                                 "fetched.txt")
+                "(download url) answers where it put the file")
+    (check-step (and (probe-file target)
+                     (equal "fetched, not typed" (uiop:read-file-line target)))
+                "and the file is what was at the URL")
+    (check-step (submit-and-wait listener "(download \"http://example.invalid/x\")"
+                                 "Only https://")
+                "an address that brings nothing back says so, and what is fetched")
+    (wait-for (lambda () (restarts-panel-visible-p listener)) :timeout 10)
+    (pump-for 0.3d0)
+    (press-top-level-row listener)
+    (check-step (back-at-top-p listener) "and the top-level restart leaves it")))
 
 (defun debugger-test-windows (listener)
   "Where the windows were: recorded, refused when out of reach, and put back."
@@ -1137,6 +1165,36 @@ a pointer vouched for, an array walked into, a window's picture and controls."
     (pump-for 0.3d0)
     (check-step (null *inspectors*) "and these close as the others did")))
 
+(defun debugger-test-arglist (listener directory)
+  "The hint in the window's subtitle: what the call being typed takes, and the
+argument at the caret."
+  (let* ((view (listener-view-object listener))
+         (pointer (listener-view listener))
+         (window (listener-window listener)))
+    (flet ((type-input (text)
+             (replace-pending-input view pointer text)
+             ;; As a keystroke leaves it: the caret at the end, which is what
+             ;; AppKit tells the delegate of.
+             (objc:invoke pointer "setSelectedRange:" (cons (transcript-length pointer) 0))
+             (pump 0.1d0))
+           (subtitle ()
+             (objc:ns-string-to-string (objc:invoke window "subtitle"))))
+      (type-input "(mapcar #'1+ ")
+      (check-step (search "(mapcar function ‹list› &rest more-lists)" (subtitle))
+                  "typing (mapcar #'1+ puts what MAPCAR takes under the title: ~s" (subtitle))
+      (write-window-png window (namestring (merge-pathnames
+                                            "arglist.png"
+                                            (uiop:ensure-directory-pathname directory))))
+      (type-input "(let ((x 1)) (format t ")
+      (check-step (search "(format destination ‹control-string› &rest" (subtitle))
+                  "inside a LET, the innermost call: ~s" (subtitle))
+      (setf (preference :arglist-hints) nil)
+      (preferences-changed)
+      (check-step (equal "" (subtitle)) "switched off in Settings, it goes")
+      (setf (preference :arglist-hints) t)
+      (type-input "")
+      (check-step (equal "" (subtitle)) "and with nothing typed there is nothing to say"))))
+
 (defun run-debugger-test ()
   "Drive the pane and check it.  Exits 0 only when every check held."
   (let ((listener *listener*)
@@ -1152,6 +1210,7 @@ a pointer vouched for, an array walked into, a window's picture and controls."
     (debugger-test-value listener directory)
     (debugger-test-pending-input listener)
     (debugger-test-line-start listener)
+    (debugger-test-arglist listener directory)
     (debugger-test-levels listener)
     (debugger-test-history listener)
     (debugger-test-two-listeners listener)

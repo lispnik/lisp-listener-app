@@ -98,6 +98,11 @@ is involved: nothing is photographed off the screen.
   operator takes a body is asked of the running image, so your own macros
   indent too.
 - **Tab** completes the symbol before the caret, from the listener's package.
+- **What a call takes** is shown as you type it: with the caret in
+  `(mapcar #'1+ `, the window's title says `(mapcar function ‹list› &rest
+  more-lists)`, the argument the caret is on marked; on iOS it is the line over
+  the keys, that argument in bold. It is asked of the running image, so a
+  function you defined a moment ago is described too. Settings can switch it off.
 - **C-a**, Home and ⌘← go to the start of the line, which is after the prompt.
 - **↑ and ↓** walk the history, and **⌘R** searches all of it: type to narrow,
   and the form you choose goes back at the prompt to edit. The history is kept
@@ -253,6 +258,25 @@ takes effect at once and is kept, in `preferences.lisp-expr` beside the
 history; `(setf (lisp-listener:preference :font-size) 16)` is the same thing
 from the prompt. `init.lisp` is loaded afterwards and so has the last word.
 
+**Edit init.lisp…** opens that file, made first with a few lines saying what
+it is for: in your editor for `.lisp` files on the Mac, or TextEdit if nothing
+claims them; and on iOS in an editor of its own in Settings, whose **Save and
+Load** loads it at the prompt so that it is in force at once.
+`(lisp-listener:init-file)` answers where it is.
+
+### Files from the network
+
+`(download url)` fetches a file and answers where it put it: in `~/Downloads`
+on the Mac, in the app's own folder on iOS, or wherever a second argument says.
+
+```lisp
+(download "https://example.com/lib/thing.lisp")
+(load *)
+```
+
+Only `https://` addresses are fetched — the system refuses plain `http://` —
+and the listener waits while it fetches.
+
 The application remembers its windows: quit with two listeners and the canvas
 open, and that is what comes back, where they were.
 
@@ -392,8 +416,12 @@ A `.lisp` file in the Files app, or in a share sheet, offers **Lisp Listener**:
 opening it loads it, with the `(load "…")` typed at the prompt as File ▸ Open…
 does on the Mac. **Open** on the key bar is the same thing from inside: the
 system's document picker. The app's own folder is in Files under On My iPhone,
-so a file put there is `(load "name.lisp")` away, `init.lisp` can be edited,
-and a picture saved with `(save "name.png")` is there to share.
+so a file put there is `(load "name.lisp")` away, and a picture saved with
+`(save "name.png")` or a file fetched with `(download url)` is there to share.
+That folder is home, too: a relative pathname, and `~/`, both mean it.
+
+`(inspect (inspector:objc (uikit:key-window)))` inspects the window itself: a
+picture of it as it is drawn, and its subviews, each one to walk into and see.
 
 The canvas goes where there is room for it. On an iPad, or a big phone on its
 side, it is **docked** beside the transcript, which keeps the keyboard: type a

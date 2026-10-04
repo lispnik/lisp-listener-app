@@ -95,3 +95,43 @@ Answers PATH.  The colours are the window's; the words are the record."
                             :external-format :utf-8)
     (write-string (transcript-text-of listener) out))
   path)
+
+;;; (download url) ----------------------------------------------------------------
+;;;
+;;; A file from the network, by Foundation, which both platforms have and which
+;;; the image can already reach: there is no HTTP library in the iOS image, and
+;;; the Mac's would be one more thing to load.  -dataWithContentsOfURL: blocks,
+;;; which is right here -- this runs on the listener thread, never thread 1 --
+;;; and an interrupt waits for it, as it does for any foreign call.
+
+(defun url-file-name (nsurl)
+  "The last part of NSURL's path, to name the file after: \"x.lisp\" for
+https://host/a/x.lisp?y=1, or NIL when the path has none."
+  (let ((name (ignore-errors
+               (objc:ns-string-to-string (objc:invoke nsurl "lastPathComponent")))))
+    (and name (plusp (length name)) (string/= name "/") name)))
+
+(defun lisp-listener:download (url &optional name)
+  "Fetch URL and keep it as a file; answer where it went.
+
+NAME is what to call it, the last part of the URL's path if not given.  A name
+with no directory goes in your own folder: ~/Downloads on the Mac, the app's
+folder in Files on a phone.  Only https:// addresses are fetched -- the system
+refuses plain http://.  A file:// URL copies a file.
+
+    (download \"https://example.com/lib/thing.lisp\")
+    (load *)"
+  (let ((nsurl (objc:invoke "NSURL" "URLWithString:" url)))
+    (unless (live-pointer-p nsurl)
+      (error "~s is not a URL." url))
+    (let* ((path (merge-pathnames (or name (url-file-name nsurl) "download")
+                                  (or (ignore-errors (download-directory))
+                                      *default-pathname-defaults*)))
+           (data (objc:invoke "NSData" "dataWithContentsOfURL:" nsurl)))
+      (unless (live-pointer-p data)
+        (error "Nothing came back from ~a.~:[~;  Only https:// addresses are fetched.~]"
+               url (eql 0 (search "http:" url :test #'char-equal))))
+      (ensure-directories-exist path)
+      (unless (objc:invoke-bool data "writeToFile:atomically:" (namestring path) t)
+        (error "~a could not be written." (namestring path)))
+      (truename path))))

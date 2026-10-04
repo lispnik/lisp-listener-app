@@ -25,6 +25,10 @@ input region was before src/paredit.lisp existed.")
 (defparameter *paren-highlight-enabled* t
   "Whether the parenthesis under the caret and its partner are tinted.")
 
+(defparameter *arglist-hints-enabled* t
+  "Whether the lambda list of the call being typed is shown, with the argument
+the caret is on picked out.  See src/arglist.lisp.")
+
 (defparameter *auto-indent-enabled* t
   "Whether Option-Return indents the new line.  NIL still breaks the line, at
 column 0: the key is how a form is written over several lines at all, so it

@@ -52,7 +52,7 @@
   ;; down -- but loading the one that ships on this Lisp keeps it honest.
   (dolist (name (append '("package" "impl" "main-thread" "queue" "listener"
                           "history" "sexp" "paredit" "keymap" "indent" "transcript"
-                          "completion" "paren-highlight" "paredit-view" "history-search"
+                          "completion" "paren-highlight" "arglist" "paredit-view" "history-search"
                           "streams" "config"
                           "restarts" "preferences" "files" "canvas" "places" "views"
                           "inspector" "standard-views" "objc-views" "examples" "repl")
@@ -897,13 +897,25 @@ its lambda list."
     (unwind-protect
          (progn
            (check (eq :none (load-init-file)) "no init file is not a failure")
+           (let ((path (init-file)))
+             (check (and (probe-file path)
+                         (search "loaded each time"
+                                 (uiop:read-file-string path :external-format :utf-8)))
+                    "(init-file) makes one, saying what it is for")
+             (check (eq :loaded (load-init-file))
+                    "and what it makes loads, being only comments")
+             (with-open-file (stream path :direction :output :if-exists :append)
+               (write-string "(defvar cl-user::*kept* t)" stream))
+             (check (equal path (init-file)) "asked again, it is the same file")
+             (check (search "*kept*" (uiop:read-file-string path))
+                    "and is left as it was"))
            (ensure-directories-exist directory)
-           (with-open-file (stream (init-file) :direction :output
+           (with-open-file (stream (init-file-path) :direction :output
                                                :if-exists :supersede)
              (write-string "(setf *paren-highlight-enabled* nil)" stream))
            (check (eq :loaded (load-init-file)) "an init file is loaded")
            (check (null *paren-highlight-enabled*) "and what it sets is set")
-           (with-open-file (stream (init-file) :direction :output
+           (with-open-file (stream (init-file-path) :direction :output
                                                :if-exists :supersede)
              (write-string "(error \"deliberate\")" stream))
            (let ((outcome (load-init-file)))
@@ -1771,6 +1783,45 @@ bound away from the front end's own -- a test has no business writing into
       (stop-inspector-worker)))
   (check (null *inspector-worker*) "and the worker ends when it is asked to"))
 
+(defcase case-arglist "Arglist hints: what the call being typed takes, and which argument."
+  (eval '(defun cl-user::test-hinted (alpha beta &optional gamma &key delta)
+          (list alpha beta gamma delta)))
+  (eval '(defmacro cl-user::test-hinted-macro (name &body body) `(list ',name ,@body)))
+  (let ((package (find-package "COMMON-LISP-USER")))
+    (flet ((hint (text &optional (offset (length text)))
+             (multiple-value-bind (line start end) (arglist-hint text offset package)
+               (list line (and start (subseq line start end))))))
+      (check (equal (hint "(test-hinted ")
+                    '("(test-hinted alpha beta &optional gamma &key delta)" "alpha"))
+             "a function's lambda list, the first argument picked out")
+      (check (equal (second (hint "(test-hinted 1 ")) "beta") "the second, after the first")
+      (check (equal (second (hint "(test-hinted 1 2")) "beta")
+             "on an argument, that one, not the next")
+      (check (equal (second (hint "(test-hinted 1 2 ")) "gamma") "an &optional one")
+      (check (and (first (hint "(test-hinted 1 2 3 :delta "))
+                  (null (second (hint "(test-hinted 1 2 3 :delta "))))
+             "past &key nothing is picked out, and the line is still there")
+      (check (and (first (hint "(test-hinted")) (null (second (hint "(test-hinted"))))
+             "on the operator itself, the line with nothing picked out")
+      (check (equal (hint "(test-hinted (test-hinted-macro x ")
+                    '("(test-hinted-macro name &body body)" "body"))
+             "the innermost call: a macro, its &body taking what comes after")
+      (check (equal (second (hint "(test-hinted (list 1 2) ")) "beta")
+             "a call closed before the caret is an argument of the one around it")
+      (check (equal (hint "(let ((x ")
+                    '("(let bindings &body body)" "bindings"))
+             "a special operator, from the table, and through a list that is no call")
+      (check (equal (second (hint "(if t ")) "then") "IF, the second argument")
+      (check (null (first (hint "42 "))) "nothing outside a form")
+      (check (null (first (hint "(no-such-function-anywhere "))) "nothing for what names nothing")
+      (check (null (first (hint "(test-hinted \"a (b "))) "nothing inside a string")
+      (check (equal (hint "(test-hinted ; a comment
+  ")
+                    '("(test-hinted alpha beta &optional gamma &key delta)" "alpha"))
+             "a comment is not an argument")))
+  (fmakunbound 'cl-user::test-hinted)
+  (fmakunbound 'cl-user::test-hinted-macro))
+
 ;;; ----------------------------------------------------------------------------
 
 (dolist (case '(case-session case-debugger case-use-value case-restart-with-value
@@ -1786,7 +1837,7 @@ bound away from the front end's own -- a test has no business writing into
                 case-prompt-is-recorded
                 case-canvas case-examples case-preferences
                 case-places case-views case-scenes case-inspector
-                case-more-views case-readout case-time-limit))
+                case-more-views case-readout case-time-limit case-arglist))
   (funcall case))
 
 (format t "~&~%headless-test: ~d check~:p, ~d failure~:p~%" *checks* *failures*)

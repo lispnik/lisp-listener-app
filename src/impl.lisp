@@ -173,6 +173,23 @@ phone has not got; only SBCL answers."
                          (disassemble function))))
   #+ecl (progn function nil))
 
+(defmacro recorded-cl-arglists ()
+  "The lambda lists of COMMON-LISP's functions and macros, as an alist, taken
+when this is COMPILED -- or NIL where the running image will say for itself.
+
+ECL keeps them in a help file it reads at run time, which an iOS app is built
+without: there, (mapcar ... told nothing.  The image that compiles the app is
+a whole ECL, which has the file, so it is asked then and the answers are
+compiled in."
+  #+ecl `',(let ((table '()))
+             (do-external-symbols (symbol "COMMON-LISP")
+               (when (and (fboundp symbol) (not (special-operator-p symbol)))
+                 (multiple-value-bind (list known)
+                     (ignore-errors (ext:function-lambda-list symbol))
+                   (when known (push (cons symbol list) table)))))
+             table)
+  #-ecl nil)
+
 (defun function-arglist (function)
   "FUNCTION's lambda list and whether it is known, as two values."
   (handler-case
@@ -242,6 +259,9 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 request-restart-value
                 ;; The history list, the same three ways.
                 show-history-popup hide-history-popup history-popup-visible-p
+                ;; Say what the call being typed takes: a line of text, and
+                ;; the start and end in it of the argument at the caret.
+                show-arglist-hint
                 ;; Which listener a menu item or a key means.
                 current-listener
                 ;; The canvas (src/canvas.lisp): :APPKIT or :UIKIT, for the
@@ -252,6 +272,8 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 ;; ...write it to a PNG file; and the directory a file with no
                 ;; directory of its own is saved in.
                 save-canvas-png documents-directory
+                ;; Where (download url) puts a file that names no directory.
+                download-directory
                 ;; The inspector (src/inspector.lisp): what kinds of scene this
                 ;; front end can put on screen -- none means INSPECT prints --
                 ;; put an inspector's window up; and show its new model.
@@ -273,4 +295,4 @@ ECL never signals a thread to collect garbage, so the question does not arise."
 ;;; system tolerates a forward reference; the compile check, which compiles each
 ;;; file on its own, reports one as a style warning without these.
 (declaim (ftype function refresh-paren-highlight clear-paren-highlight
-                utf-16-length inspect-object))
+                utf-16-length inspect-object live-pointer-p))

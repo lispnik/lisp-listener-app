@@ -191,7 +191,8 @@ view of a click on one: -textView:clickedOnLink:atIndex:."
   ;; typed arrives wearing the tint.  UIKit resets them on its own account and
   ;; src/ios/view.lisp does the same thing for the same reason.
   (apply-typing-attributes pointer)
-  (refresh-paren-highlight self pointer))
+  (refresh-paren-highlight self pointer)
+  (refresh-arglist-hint self pointer))
 
 ;;; Paredit ---------------------------------------------------------------------
 ;;;
@@ -301,3 +302,19 @@ Meta -- which is what a Mac keyboard offers for M-."
         (array (objc:invoke "NSMutableArray" "array")))
     (dolist (candidate (listener-completions token) array)
       (objc:invoke array "addObject:" candidate))))
+
+;;; What the call being typed takes, in the window's subtitle: under the title,
+;;; out of the way of the transcript, and gone when there is nothing to say.
+;;; A subtitle is plain text, so the argument at the caret is bracketed.
+
+(defun show-arglist-hint (listener hint start end)
+  (let ((window (listener-window listener)))
+    (when (live-pointer-p window)
+      (objc:invoke window "setSubtitle:"
+                   (cond ((null hint) "")
+                         ((and start end)
+                          (concatenate 'string (subseq hint 0 start)
+                                       "‹" (subseq hint start end) "›"
+                                       (subseq hint end)))
+                         (t hint))))
+    t))

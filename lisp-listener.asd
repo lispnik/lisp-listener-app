@@ -37,6 +37,7 @@
                  (:file "transcript")
                  (:file "completion")
                  (:file "paren-highlight")
+                 (:file "arglist")
                  (:file "paredit-view")
                  (:file "history-search")
                  (:file "streams")
