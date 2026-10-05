@@ -207,6 +207,6 @@ Already answered in the bundle: `ITSAppUsesNonExemptEncryption` is false.
 | 0.1.58 | C-a goes to the start of the line, after the prompt |
 | 0.1.61 | (inspect x), printed as text; a thirteenth example |
 | 0.1.62 | the inspector as a sheet: views, options and controls, Set, Insert, Remove and Add, a readout under a finger |
-| next | a tap on a printed value inspects it; Views lists every view; values are no longer blue or printed twice; a sheet can no longer be left up; argument hints; (download url); init.lisp from Settings; ASDF; the editor |
+| 0.1.70 | a tap on a printed value inspects it; Views lists every view; values are no longer blue or printed twice; a sheet can no longer be left up; argument hints; (download url); init.lisp from Settings; ASDF; the editor |
 
-Everything above describes the next build. Do not paste it over an older one.
+Everything above describes 0.1.70. Do not paste it over an older one.
