@@ -102,10 +102,14 @@ begin with, and (make-turtle) makes more."
   (sprite nil))
 
 (defmethod print-object ((turtle turtle) stream)
-  (print-unreadable-object (turtle stream :type t :identity t)
-    (format stream "at (~,1f, ~,1f) facing ~,1f~:[, pen up~;~]"
-            (turtle-x turtle) (turtle-y turtle) (turtle-heading turtle)
-            (turtle-down turtle))))
+  ;; Each to the nearest tenth first, as a rational: a turtle that has turned
+  ;; a right angle is 6e-16 off the axis, and an older ECL's ~F wrote that out
+  ;; in full rather than as 0.0.
+  (flet ((tenths (value) (/ (round value 1/10) 10)))
+    (print-unreadable-object (turtle stream :type t :identity t)
+      (format stream "at (~,1f, ~,1f) facing ~,1f~:[, pen up~;~]"
+              (tenths (turtle-x turtle)) (tenths (turtle-y turtle))
+              (tenths (turtle-heading turtle)) (turtle-down turtle)))))
 
 (defvar *turtle* (make-turtle-state)
   "The turtle the turtle's commands move: the canvas's own, unless WITH-TURTLE

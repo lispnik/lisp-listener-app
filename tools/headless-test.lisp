@@ -1266,7 +1266,7 @@ bound away from the front end's own -- a test has no business writing into
              "and leaves the canvas's own where it was")
       (check (= 2 (length (canvas-contents))) "each drew its line")
       (check (search "at (60.0, 0.0) facing 90.0" (prin1-to-string b))
-             "a turtle prints where it is")
+             "a turtle prints where it is: ~a" (prin1-to-string b))
       (canvas:forward 5)
       (check (= 6 (length (turtle-sprite-ops))) "all three are drawn")
       (canvas:clear)
