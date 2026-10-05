@@ -699,6 +699,50 @@ A step whose predicate has not held within its time fails."
                          (> (length (canvas-contents)) 600)))
          nil)
    (list :hold nil nil)
+   ;; The turtle: watched, filling and stamping, then L-systems and two
+   ;; turtles at once.  WAIT is made quicker for the flower, which takes ten
+   ;; seconds at its own speed; it still walks a step at a time, so the
+   ;; turtle's trail is painted on the way.
+   (list "the turtle is watched drawing a flower" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (setf *canvas-paint-failures* 0
+                 *canvas-time-scale* 0.2)
+           (type-line listener "(example \"turtle\")")))
+   (list "which it fills and stamps, and is drawn over"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (find :polygon (canvas-contents) :key #'first)))
+         (lambda ()
+           (setf *canvas-time-scale* 1)
+           (unless (member *turtle* (bt:with-lock-held (*canvas-lock*) *turtles*))
+             (error "the turtle is not on the canvas"))))
+   (list :hold nil nil)
+   (list "L-systems: a snowflake, filled under its outline" (constantly t)
+         (lambda () (type-line listener "(progn (example \"lsystem\") (snowflake 4))")))
+   (list "is a polygon under 768 lines"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (eq :polygon (first (first (canvas-contents))))))
+         (lambda ()
+           (let ((lines (count :line (canvas-contents) :key #'first)))
+             (unless (= 768 lines) (error "~d lines" lines)))))
+   (list :hold nil nil)
+   (list "two turtles at once" (constantly t)
+         (lambda ()
+           (type-line listener "(progn (clear) (let ((a (make-turtle :x -40)) (b (make-turtle :x 40))) (dotimes (i 36) (hue (/ i 36)) (with-turtle a (forward 6) (right 10)) (with-turtle b (forward 6) (left 10)))))")))
+   (list "each walks its own circle, and both are drawn"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (= 72 (length (canvas-contents)))))
+         (lambda ()
+           (let ((shapes (length (turtle-sprite-ops))))
+             (unless (= 4 shapes) (error "the turtles are ~d shapes, wanted 4" shapes)))))
+   (list "and saved, the picture leaves them out" (constantly t)
+         (lambda () (type-line listener "(save \"turtles\")")))
+   (list "with nothing the painter could not paint"
+         (lambda () (and (at-top-level-prompt-p listener)
+                         (probe-file (merge-pathnames "turtles.png" (history-directory)))))
+         (lambda ()
+           (unless (zerop *canvas-paint-failures*)
+             (error "~d shapes could not be painted" *canvas-paint-failures*))))
+   (list :hold nil nil)
    ;; Doodle, with a finger the self-test supplies.
    (list "the canvas takes a finger" (constantly t)
          (lambda () (type-line listener "(example \"doodle\")")))

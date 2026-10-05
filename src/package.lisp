@@ -78,6 +78,7 @@
    #:go-to #:set-heading #:arc #:filled #:stamp
    #:pos #:heading #:towards #:distance-to
    #:turtle-speed #:show-turtle #:hide-turtle
+   #:make-turtle #:with-turtle #:current-turtle
    ;; Animation and games.
    #:frame #:wait #:key #:pointer))
 

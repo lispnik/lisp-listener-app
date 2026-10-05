@@ -135,6 +135,7 @@ way, with y going up.
 | a turtle | `forward` `back` `left` `right` `arc` `go-to` `set-heading` `pen-up` `pen-down` `home` `move-to` |
 | what it knows | `(pos)` `(heading)` `(towards x y)` `(distance-to x y)` |
 | what it leaves | `(filled ...)` fills the shape the turtle walks round, and `(stamp)` leaves a copy of the turtle |
+| more turtles | `(make-turtle :x 50)` makes another, and `(with-turtle a ...)` moves it |
 | animation | `(frame ...)` draws one whole picture in place of the last, and `(wait 0.1)` pauses |
 | games | `(key)` answers the next key pressed in the canvas — `:left`, `:space`, `#\q` — or `nil` |
 | the mouse, or a finger | `(pointer)` answers where it is and whether it is down — a mouse is followed with its button up, too — and a press is also the key `:click` |
@@ -143,13 +144,21 @@ way, with y going up.
 They are ordinary functions in a package called `canvas`, imported into
 `cl-user` when a listener starts, and each has a docstring.
 
-![The turtle part way round a flower's third petal, its outline traced and the first two filled](doc/turtle.png)
+![The turtle drawing a flower, petal by petal, then the L-systems typed at the prompt: a snowflake, a Hilbert curve, an arrowhead, a plant and a rosette](doc/turtle.gif)
 
 **The turtle can be watched.** It is drawn on the canvas, an arrow where it
 stands and facing its way, once you use it. `(turtle-speed 1)` makes it walk
 and turn slowly enough to follow, `10` quickly, and `0` — where it starts —
 draws at once. `(hide-turtle)` and `(show-turtle)` put it away and bring it
-back. The turtle is drawn over the picture, not in it, so `(save …)` saves the
+back. There can be several: each has its own place, heading and pen, and the
+commands inside `with-turtle` move that one.
+
+```lisp
+(let ((a (make-turtle :x -50)) (b (make-turtle :x 50)))
+  (dotimes (i 36)
+    (with-turtle a (forward 8) (right 10))
+    (with-turtle b (forward 8) (left 10))))
+``` The turtle is drawn over the picture, not in it, so `(save …)` saves the
 drawing without it.
 
 ```lisp

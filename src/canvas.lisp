@@ -66,6 +66,10 @@ that frame's shapes, newest first.  NIL otherwise.")
   "How many times the canvas has been painted.  For the drivers, which need to
 know that -drawRect: really ran.")
 
+(defvar *canvas-paint-failures* 0
+  "How many shapes the painter could not paint.  It reports each and goes on,
+so a driver that wants to know asks this.")
+
 (defvar *canvas-frames* 0
   "How many whole pictures FRAME has swapped in.  For the demo, which
 photographs an animation a frame at a time and has to know when there is a new
@@ -80,25 +84,41 @@ frame of a game stays up long enough to be photographed.")
 
 (defvar *canvas-color* '(1d0 1d0 1d0 1d0))
 (defvar *canvas-pen* 1d0)
-(defvar *turtle-x* 0d0)
-(defvar *turtle-y* 0d0)
-(defvar *turtle-heading* 0d0
-  "Degrees clockwise from straight up, as in Logo.")
-(defvar *turtle-down* t)
-(defvar *turtle-visible* t
-  "Whether the turtle itself is drawn: SHOW-TURTLE and HIDE-TURTLE.  It is
-drawn only once a turtle command has run since the last CLEAR, so a picture of
-circles has no turtle in it.")
+
+(defstruct (turtle (:constructor make-turtle-state (&key (x 0d0) (y 0d0) (heading 0d0))))
+  "A turtle: where it is, which way it faces, and its pen.  There is one to
+begin with, and (make-turtle) makes more."
+  (x 0d0 :type double-float)
+  (y 0d0 :type double-float)
+  (heading 0d0 :type double-float)      ; degrees clockwise from straight up, as in Logo
+  (down t)
+  ;; Whether it is drawn: SHOW-TURTLE and HIDE-TURTLE.  It is drawn only once a
+  ;; turtle command has moved it since the last CLEAR, so a picture of circles
+  ;; has no turtle in it.
+  (visible t)
+  ;; What thread 1 paints of it, over the drawing and not in it: NIL, or (X Y
+  ;; HEADING COLOR PEN TRAIL), TRAIL the (X1 Y1 X2 Y2) of the line it is part
+  ;; way along.  Under *CANVAS-LOCK*.
+  (sprite nil))
+
+(defmethod print-object ((turtle turtle) stream)
+  (print-unreadable-object (turtle stream :type t :identity t)
+    (format stream "at (~,1f, ~,1f) facing ~,1f~:[, pen up~;~]"
+            (turtle-x turtle) (turtle-y turtle) (turtle-heading turtle)
+            (turtle-down turtle))))
+
+(defvar *turtle* (make-turtle-state)
+  "The turtle the turtle's commands move: the canvas's own, unless WITH-TURTLE
+says otherwise.")
 (defvar *turtle-speed* 0
   "0 to draw at once; 1 (slow) to 10 (fast) to watch the turtle walk and turn.")
 (defvar *turtle-fill* nil
   "While FILLED's body runs: a cons whose car collects the points the turtle
 has been to, newest first.")
 
-(defvar *turtle-sprite* nil
-  "What thread 1 paints of the turtle, over the drawing and not in it: NIL, or
-(X Y HEADING COLOR PEN TRAIL), TRAIL the (X1 Y1 X2 Y2) of the line it is part
-way along.  Under *CANVAS-LOCK*.")
+(defvar *turtles* '()
+  "The turtles drawn on the canvas: every one moved since the last CLEAR.
+Under *CANVAS-LOCK*.")
 
 (defvar *canvas-paint-turtle* t
   "Bound to NIL around saving a PNG: a picture is the drawing, not the turtle
@@ -210,7 +230,7 @@ everything drawn since.  A turtle's fill goes under its own outline this way."
         (setf *canvas-ops* ops
               *canvas-op-count* (length ops)
               ;; A frame is a whole picture, and has no turtle in it.
-              *turtle-sprite* nil)
+              *turtles* '())
         (incf *canvas-frames*))))
   (request-canvas-redisplay)
   (values))
@@ -229,11 +249,13 @@ picture to the next: this is how to animate.
 ;;; The canvas ---------------------------------------------------------------------
 
 (defun canvas:clear ()
-  "Wipe the canvas, and put the turtle back in the middle, facing up."
-  (setf *turtle-x* 0d0 *turtle-y* 0d0 *turtle-heading* 0d0 *turtle-down* t)
+  "Wipe the canvas, and put the turtle back in the middle, facing up.  Any
+other turtles leave the canvas until they are moved again."
+  (setf (turtle-x *turtle*) 0d0 (turtle-y *turtle*) 0d0
+        (turtle-heading *turtle*) 0d0 (turtle-down *turtle*) t)
   (cond (*canvas-frame* (setf (car *canvas-frame*) '()))
         (t (bt:with-lock-held (*canvas-lock*)
-             (setf *canvas-ops* '() *canvas-op-count* 0 *turtle-sprite* nil))
+             (setf *canvas-ops* '() *canvas-op-count* 0 *turtles* '()))
            (request-canvas-redisplay)))
   (values))
 
@@ -425,11 +447,12 @@ going from FROM to TO, and answers two values, x and y.
 the line it is part way along, if it is being watched walking one.  Not inside
 a frame: a frame is a whole picture, and has no turtle in it."
   (unless *canvas-frame*
-    (let ((sprite (and *turtle-visible*
-                       (list *turtle-x* *turtle-y* *turtle-heading*
+    (let ((sprite (and (turtle-visible *turtle*)
+                       (list (turtle-x *turtle*) (turtle-y *turtle*) (turtle-heading *turtle*)
                              *canvas-color* *canvas-pen* trail))))
       (bt:with-lock-held (*canvas-lock*)
-        (setf *turtle-sprite* sprite)))
+        (setf (turtle-sprite *turtle*) sprite)
+        (pushnew *turtle* *turtles*)))
     (request-canvas-redisplay))
   (values))
 
@@ -442,17 +465,17 @@ speed and there is somebody to watch it."
 
 (defun turtle-walk-to (x y)
   "Walk the turtle in a straight line to (X, Y), drawing if its pen is down."
-  (let* ((x0 *turtle-x*) (y0 *turtle-y*)
+  (let* ((x0 (turtle-x *turtle*)) (y0 (turtle-y *turtle*))
          (steps (turtle-steps (sqrt (+ (expt (- x x0) 2) (expt (- y y0) 2)))
                               (* 0.6d0 *turtle-speed*))))
     (loop for i from 1 below steps
           for part = (/ i steps)
-          do (setf *turtle-x* (+ x0 (* part (- x x0)))
-                   *turtle-y* (+ y0 (* part (- y y0))))
-             (update-turtle-sprite (and *turtle-down* (list x0 y0 *turtle-x* *turtle-y*)))
+          do (setf (turtle-x *turtle*) (+ x0 (* part (- x x0)))
+                   (turtle-y *turtle*) (+ y0 (* part (- y y0))))
+             (update-turtle-sprite (and (turtle-down *turtle*) (list x0 y0 (turtle-x *turtle*) (turtle-y *turtle*))))
              (canvas:wait *turtle-frame-seconds*))
-    (setf *turtle-x* x *turtle-y* y)
-    (when *turtle-down*
+    (setf (turtle-x *turtle*) x (turtle-y *turtle*) y)
+    (when (turtle-down *turtle*)
       (canvas:line x0 y0 x y))
     (when *turtle-fill*
       (push (cons x y) (car *turtle-fill*)))
@@ -460,21 +483,21 @@ speed and there is somebody to watch it."
 
 (defun turtle-turn (degrees)
   "Turn the turtle DEGREES clockwise."
-  (let ((h0 *turtle-heading*)
+  (let ((h0 (turtle-heading *turtle*))
         (steps (turtle-steps degrees (* 3d0 *turtle-speed*))))
     (loop for i from 1 below steps
-          do (setf *turtle-heading* (mod (+ h0 (* degrees (/ i steps))) 360d0))
+          do (setf (turtle-heading *turtle*) (mod (+ h0 (* degrees (/ i steps))) 360d0))
              (update-turtle-sprite)
              (canvas:wait *turtle-frame-seconds*))
-    (setf *turtle-heading* (mod (+ h0 degrees) 360d0))
+    (setf (turtle-heading *turtle*) (mod (+ h0 degrees) 360d0))
     (update-turtle-sprite)))
 
 (defun canvas:forward (distance)
   "Walk the turtle DISTANCE the way it is facing, drawing if its pen is down."
   (let* ((distance (real-number distance))
-         (angle (* *turtle-heading* (/ pi 180))))
-    (turtle-walk-to (+ *turtle-x* (* distance (sin angle)))
-                    (+ *turtle-y* (* distance (cos angle))))))
+         (angle (* (turtle-heading *turtle*) (/ pi 180))))
+    (turtle-walk-to (+ (turtle-x *turtle*) (* distance (sin angle)))
+                    (+ (turtle-y *turtle*) (* distance (cos angle))))))
 
 (defun canvas:back (distance)
   "Walk the turtle backwards, without turning it round."
@@ -496,7 +519,7 @@ way it was."
 (defun canvas:set-heading (degrees)
   "Face the turtle DEGREES clockwise from straight up -- 90 is right, 180 down --
 turning the short way round."
-  (turtle-turn (- (mod (+ (- (real-number degrees) *turtle-heading*) 180d0) 360d0) 180d0)))
+  (turtle-turn (- (mod (+ (- (real-number degrees) (turtle-heading *turtle*)) 180d0) 360d0) 180d0)))
 
 (defun canvas:arc (radius &optional (degrees 360))
   "Walk round part of a circle: its centre RADIUS to the turtle's left, going
@@ -518,42 +541,43 @@ turtle began."
 
 (defun canvas:pen-up ()
   "Lift the turtle's pen: it moves without drawing."
-  (setf *turtle-down* nil)
+  (setf (turtle-down *turtle*) nil)
   (update-turtle-sprite))
 
 (defun canvas:pen-down ()
   "Put the turtle's pen back down."
-  (setf *turtle-down* t)
+  (setf (turtle-down *turtle*) t)
   (update-turtle-sprite))
 
 (defun canvas:home ()
   "Put the turtle back in the middle, facing up, without drawing."
-  (setf *turtle-x* 0d0 *turtle-y* 0d0 *turtle-heading* 0d0)
+  (setf (turtle-x *turtle*) 0d0 (turtle-y *turtle*) 0d0 (turtle-heading *turtle*) 0d0)
   (update-turtle-sprite))
 
 (defun canvas:move-to (x y)
   "Put the turtle at (X, Y) without drawing, facing the way it was."
-  (setf *turtle-x* (real-number x) *turtle-y* (real-number y))
+  (setf (turtle-x *turtle*) (real-number x) (turtle-y *turtle*) (real-number y))
   (update-turtle-sprite))
 
 (defun canvas:pos ()
   "Where the turtle is: two values, x and y."
-  (values *turtle-x* *turtle-y*))
+  (values (turtle-x *turtle*) (turtle-y *turtle*)))
 
 (defun canvas:heading ()
   "Which way the turtle faces, in degrees clockwise from straight up."
-  *turtle-heading*)
+  (turtle-heading *turtle*))
 
 (defun canvas:towards (x y)
   "The heading that would face the turtle at (X, Y): (set-heading (towards 0 0))."
-  (let ((angle (* (atan (- (real-number x) *turtle-x*) (- (real-number y) *turtle-y*))
+  (let ((angle (* (atan (- (real-number x) (turtle-x *turtle*))
+                        (- (real-number y) (turtle-y *turtle*)))
                   (/ 180 pi))))
     (mod angle 360d0)))
 
 (defun canvas:distance-to (x y)
   "How far the turtle is from (X, Y)."
-  (sqrt (+ (expt (- (real-number x) *turtle-x*) 2)
-           (expt (- (real-number y) *turtle-y*) 2))))
+  (sqrt (+ (expt (- (real-number x) (turtle-x *turtle*)) 2)
+           (expt (- (real-number y) (turtle-y *turtle*)) 2))))
 
 (defun canvas:turtle-speed (speed)
   "How fast the turtle goes: 0 draws at once, as it always has; 1 is slow
@@ -564,23 +588,51 @@ enough to follow, and 10 is quick.  Answers the speed it had."
 (defun canvas:show-turtle ()
   "Draw the turtle itself, an arrow where it is and facing its way.  It is
 drawn once it is used, unless HIDE-TURTLE said not to."
-  (setf *turtle-visible* t)
+  (setf (turtle-visible *turtle*) t)
   (update-turtle-sprite))
 
 (defun canvas:hide-turtle ()
   "Stop drawing the turtle itself.  What it draws is drawn as before."
-  (setf *turtle-visible* nil)
+  (setf (turtle-visible *turtle*) nil)
   (update-turtle-sprite))
+
+(defun canvas:make-turtle (&key (x 0) (y 0) (heading 0))
+  "Another turtle, at (X, Y) facing HEADING with its pen down, and on the
+canvas at once.  WITH-TURTLE makes the turtle's commands move it:
+
+    (let ((a (make-turtle :x -50)) (b (make-turtle :x 50)))
+      (dotimes (i 36)
+        (with-turtle a (forward 8) (right 10))
+        (with-turtle b (forward 8) (left 10))))"
+  (let ((turtle (make-turtle-state :x (real-number x) :y (real-number y)
+                                   :heading (mod (real-number heading) 360d0))))
+    (let ((*turtle* turtle))
+      (update-turtle-sprite))
+    turtle))
+
+(defun call-with-turtle (turtle function)
+  (check-type turtle turtle)
+  (let ((*turtle* turtle))
+    (funcall function)))
+
+(defmacro canvas:with-turtle (turtle &body body)
+  "Run BODY with TURTLE as the one that FORWARD, RIGHT and the rest move."
+  `(call-with-turtle ,turtle (lambda () ,@body)))
+
+(defun canvas:current-turtle ()
+  "The turtle the turtle's commands move now: the canvas's own, unless inside
+WITH-TURTLE."
+  *turtle*)
 
 (defun canvas:stamp ()
   "Leave a copy of the turtle on the canvas, where it is, in the pen's colour."
-  (canvas-add (turtle-polygon *turtle-x* *turtle-y* *turtle-heading*
-                              *canvas-color* *canvas-pen* t))
+  (canvas-add (turtle-polygon (turtle-x *turtle*) (turtle-y *turtle*)
+                              (turtle-heading *turtle*) *canvas-color* *canvas-pen* t))
   (update-turtle-sprite))
 
 (defun call-with-turtle-fill (function)
   (let ((depth (canvas-depth))
-        (*turtle-fill* (list (list (cons *turtle-x* *turtle-y*)))))
+        (*turtle-fill* (list (list (cons (turtle-x *turtle*) (turtle-y *turtle*))))))
     (funcall function)
     (let ((points (reverse (car *turtle-fill*))))
       (when (>= (length points) 3)
@@ -864,22 +916,24 @@ are still drawn."
                  "fill")
     (dolist (op ops)
       (handler-case (paint-canvas-op op)
-        (error (condition) (note "canvas: ~a" condition)))))
+        (error (condition)
+          (incf *canvas-paint-failures*)
+          (note "canvas: ~a" condition)))))
   (values))
 
 (defun turtle-sprite-ops ()
-  "The turtle, as shapes to paint over the drawing: the line it is part way
-along, and the arrow, filled in the pen's colour and edged to stand out from
-the background.  None when it is not to be seen."
-  (let ((sprite (bt:with-lock-held (*canvas-lock*) *turtle-sprite*)))
-    (when sprite
-      (destructuring-bind (x y heading color pen trail) sprite
-        (let ((edge (if (> (reduce #'+ (subseq *canvas-background* 0 3)) 1.5d0)
-                        '(0d0 0d0 0d0 1d0)
-                        '(1d0 1d0 1d0 1d0))))
-          (append (and trail (list (list* :line color pen trail)))
-                  (list (turtle-polygon x y heading color 0d0 t)
-                        (turtle-polygon x y heading edge 0.6d0 nil))))))))
+  "The turtles, as shapes to paint over the drawing: for each, the line it is
+part way along, and its arrow, filled in the pen's colour and edged to stand
+out from the background.  None that is not to be seen."
+  (let ((sprites (bt:with-lock-held (*canvas-lock*)
+                   (remove nil (mapcar #'turtle-sprite (reverse *turtles*)))))
+        (edge (if (> (reduce #'+ (subseq *canvas-background* 0 3)) 1.5d0)
+                  '(0d0 0d0 0d0 1d0)
+                  '(1d0 1d0 1d0 1d0))))
+    (loop for (x y heading color pen trail) in sprites
+          when trail collect (list* :line color pen trail)
+          collect (turtle-polygon x y heading color 0d0 t)
+          collect (turtle-polygon x y heading edge 0.6d0 nil))))
 
 (defun paint-canvas (width height)
   "Paint the canvas into the current graphics context: what both views'

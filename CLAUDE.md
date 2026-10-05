@@ -277,9 +277,12 @@ NSTextView and UITextView share.
   (`canvas-pointer-event`) and a press is also the key `:click`. `(save
   "x.svg")` writes the display list out, all here; `(save "x.png")` is the
   front end's `save-canvas-png`, on thread 1, waited for.
-  **The turtle is painted over the drawing, not into it**: its commands keep
-  `*turtle-sprite*` (where it is, and the line it is part way along) and
-  `paint-canvas` appends `turtle-sprite-ops` to the display list it paints,
+  **The turtle is painted over the drawing, not into it**: a turtle is a
+  `turtle` structure, `*turtle*` is the one the commands move (`with-turtle`
+  binds it; `make-turtle` makes more, and an inspector's drawing binds a fresh
+  one), each keeps a `sprite` (where it is, and the line it is part way
+  along), `*turtles*` is those on the canvas, and `paint-canvas` appends
+  `turtle-sprite-ops` to the display list it paints,
   so `canvas-contents`, SVG and a saved PNG (`*canvas-paint-turtle*`, bound
   NIL by `save`) are the drawing alone; it shows once a turtle command runs
   after `clear`, and never in a frame. `(turtle-speed n)` -- not `speed`,
@@ -288,7 +291,9 @@ NSTextView and UITextView share.
   watching free. `(filled ...)` collects the turtle's points and puts a
   `:polygon` UNDER what was drawn since it began (`canvas-add-beneath`), and
   `(stamp)` adds one; `:polygon` is a shape like the others, in both painters
-  and in SVG.
+  and in SVG. The painter reports a shape it cannot paint and goes on, so it
+  counts them too (`*canvas-paint-failures*`): the iOS self-test draws the
+  turtle, an L-system and two turtles, and requires none.
 - **The inspector**, five files, all toolkit-free. The names a contributor
   types are a third package, `INSPECTOR`, defined from inside `LISP-LISTENER`
   as `CANVAS` is, and **not** imported into `CL-USER` (`text` is the canvas's).
@@ -486,7 +491,7 @@ NSTextView and UITextView share.
   and each frame is shown for its time over that scale -- then draws the
   L-systems, saving each without the turtle into `turtle/`, which `make demo`
   makes into `build/demo/turtle-gallery.png`; `doc/turtle-gallery.png` is a
-  copy, and `doc/turtle.png` one of the flower's frames. CI makes it only on Run workflow
+  copy, and `doc/turtle.gif` is the scene, cut by `make-gif.sh`. CI makes it only on Run workflow
   (`workflow_dispatch`), arm64.
 - `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the
   docked debugger through what a person does with it and checks each step:

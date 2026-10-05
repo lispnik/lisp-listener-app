@@ -211,5 +211,6 @@ Already answered in the bundle: `ITSAppUsesNonExemptEncryption` is false.
 | 0.1.62 | the inspector as a sheet: views, options and controls, Set, Insert, Remove and Add, a readout under a finger |
 | 0.1.70 | a tap on a printed value inspects it; Views lists every view; values are no longer blue or printed twice; a sheet can no longer be left up; argument hints; (download url); init.lisp from Settings; ASDF; the editor |
 | 0.1.72 | turtle graphics: the turtle drawn and watched, (turtle-speed), arc, filled, stamp, go-to and set-heading; two more examples, the flower and L-systems |
+| next | several turtles at once: (make-turtle) and (with-turtle ...) |
 
-Everything above describes 0.1.72. Do not paste it over an older one.
+Everything above describes the next build. Do not paste it over an older one.

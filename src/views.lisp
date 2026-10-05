@@ -161,7 +161,7 @@ view cannot be -- printed as text, or on the other platform."
         (*canvas-background* *canvas-default-background*)
         (*canvas-color* '(1d0 1d0 1d0 1d0))
         (*canvas-pen* 1d0)
-        (*turtle-x* 0d0) (*turtle-y* 0d0) (*turtle-heading* 0d0) (*turtle-down* t))
+        (*turtle* (make-turtle-state)))
     (funcall function)
     (make-drawing-scene :ops (reverse (car *canvas-frame*))
                         :background *canvas-background*
