@@ -143,7 +143,14 @@ order is load-bearing**:
   history-panel canvas-window preferences-window inspector-window screenshot
   objc-views debugger-test demo app`. The name it always had.
 - `lisp-listener/ios` — the core plus `src/ios/`: `view restarts-sheet
-  history-sheet canvas-sheet settings-sheet inspector-sheet objc-views app`.
+  history-sheet canvas-sheet settings-sheet editor-sheet inspector-sheet
+  objc-views app`.
+- `lisp-listener/heml` — `lisp-listener` plus heml (`heml.cocoa`) and
+  `src/macos/`: `heml heml-test`. **The application depends on this one**
+  (`lisp-listener-app.asd`); the library and `make run` do not, so the
+  listener still loads with none of heml's dependencies (iolib and its
+  libfixposix, osicat, prepl). asdf-macos-app bundles `libfixposix` and
+  `libosicat` in `Contents/Frameworks`; the core is about 75 MB with heml.
 
 `tools/compile-check.lisp` and `tools/headless-test.lisp` each carry the same
 lists by hand; a new file has to be added in all three places. The core also
@@ -412,6 +419,36 @@ NSTextView and UITextView share.
   shares the controller and is told apart by its tag. Every control's target is the sheet's one
   controller, by tag -- `uikit:on-tap` keeps its target for good, and these
   are rebuilt.
+- `src/macos/heml.lisp` — heml in this application. heml (lispnik/heml) has a
+  **hosted mode** for this: `heml.cocoa:start-hosted` on thread 1 opens it in
+  a running NSApplication without running or stopping it, leaving the
+  application's delegate alone, swapping heml's menu bar in only while its
+  window is key, and hiding rather than quitting when its window closes.
+  `heml:*evaluate-text-function*` is set to `heml-evaluate-text`, which hops
+  to thread 1 and types the text at the frontmost listener's prompt, after
+  `(in-package …)` when heml's buffer package differs; heml calls it on its
+  own thread. `listener-ed-function` goes first on `sb-ext:*ed-functions*`,
+  ahead of heml's own (which assumes it owns the main thread), and finds a
+  symbol's file and line with sb-introspect. `*editor-menu-items*`
+  (`src/macos/window.lisp`) is how it adds to the File and Listener menus,
+  so the menus have no items for an editor that is not there.
+  `-applicationShouldTerminate:` asks `heml.cocoa:hosted-quit-ok-p`.
+- `src/macos/heml-test.lisp` — the driver's heml section, run by
+  `run-debugger-test` when the image has it: `(ed "file")`, the delegate and
+  menu bar left alone, Evaluate Defun reaching the prompt, an error from it
+  opening the debugger, `(ed 'name)`, close and Show Editor, quit. heml's own
+  test of the hosted mode is `make smoke-hosted` in heml.
+- `src/ios/editor-sheet.lisp` and `src/editor.lisp` — the iOS editor. The
+  editor is a `listener-text-view` whose `role` is `:editor` and whose input
+  region starts at 0, so paredit, the indenter, completion, the paren tint and
+  the hints work on the whole buffer unchanged; Return indents, the arrows are
+  lines, and no output arrives. `listener-for-view-object` answers the
+  editor's listener, and completion, hints and indentation read in the file's
+  package (`view-reading-package`, from the last `(in-package …)` before the
+  caret, read with `*read-eval*` off in a scratch package). Eval types the
+  form at the caret with `type-into-listener`, after `(in-package …)` when the
+  packages differ, and shows what the transcript said once the listener is at
+  a prompt again. One editor, kept; the file is saved on Close and on Open….
 - `src/macos/screenshot.lisp` — drives a real listener and photographs it; this is what
   produces `doc/screenshots/`, on a CI runner, on every push.
 - `src/macos/demo.lisp` — `LISP_LISTENER_DEMO=<dir>` plays a scripted session a

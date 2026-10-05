@@ -280,6 +280,31 @@ and the listener waits while it fetches.
 The application remembers its windows: quit with two listeners and the canvas
 open, and that is what comes back, where they were.
 
+### Editing files
+
+**On the Mac, the editor is [heml](https://github.com/lispnik/heml)**, an
+Emacs-style editor written in Common Lisp, running inside the listener's own
+application: one more window, with heml's menus while it is in front.
+`(ed "file.lisp")` opens a file in it, `(ed 'name)` opens the file a definition
+is in at its line, and **File ▸ Show Editor** (⇧⌘E), **Open in Editor…** (⇧⌘O)
+and **Listener ▸ Edit Definition** (⌘E, the symbol at the caret) do the same
+from the menus. heml's own evaluation commands — `C-M-x`, `C-x C-e`, Evaluate
+Region, Load File — **evaluate at the listener's prompt**: the transcript shows
+each form, an error opens the listener's debugger, and the history keeps it,
+read in the package of heml's buffer. Closing heml's window puts it away with
+its buffers kept; quitting the application asks heml first, which offers to
+save what it has changed.
+
+**On iOS the editor is built in**, from the listener's own editing — paredit,
+the indenter, completion, the paren tint and what a call takes. **Edit** on the
+key bar opens it on the file you last edited, or on `scratch.lisp`; **Open…**
+picks another, and Settings ▸ Edit opens `init.lisp`. Return indents rather than
+submitting; the keys over the keyboard are Tab, the arrows, **Eval** (the form
+at the caret, at the prompt — what it said shows over the editor), **Load**,
+**Save** and **Close**, and a keyboard has ⌘E, ⌘L, ⌘S and ⌘W. A form is read
+in the package of the file's last `(in-package …)`, and the file is saved when
+the editor closes or opens another.
+
 ## Requirements
 
 - macOS on arm64 or Intel.
@@ -300,7 +325,14 @@ source registry. **No sibling checkouts are needed** —
 [`objc`](https://github.com/lispnik/objc) and
 [`asdf-macos-app`](https://github.com/lispnik/asdf-macos-app) are themselves
 published to ocicl, so a fresh clone plus the two commands above is enough to
-`(asdf:load-system "lisp-listener")` and to `make app`.
+`(asdf:load-system "lisp-listener")`.
+
+**The application also needs heml**, which is not on ocicl: a checkout of
+[heml](https://github.com/lispnik/heml) on the source registry, its own
+dependencies restored there (`git submodule update --init && ocicl install` in
+it), and `brew install libfixposix` for iolib. Then `(asdf:load-system
+"lisp-listener/heml")` and `make app`. The listener without the editor needs
+none of it.
 
 `ocicl.csv` is a **lockfile**, and it is committed. Every row names its package
 by digest:

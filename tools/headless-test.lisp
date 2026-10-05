@@ -52,7 +52,7 @@
   ;; down -- but loading the one that ships on this Lisp keeps it honest.
   (dolist (name (append '("package" "impl" "main-thread" "queue" "listener"
                           "history" "sexp" "paredit" "keymap" "indent" "transcript"
-                          "completion" "paren-highlight" "arglist" "paredit-view" "history-search"
+                          "completion" "paren-highlight" "arglist" "editor" "paredit-view" "history-search"
                           "streams" "config"
                           "restarts" "preferences" "files" "canvas" "places" "views"
                           "inspector" "standard-views" "objc-views" "examples" "repl")
@@ -63,7 +63,7 @@
                                  "macos/app")
                         #+ecl '("ios/view" "ios/restarts-sheet" "ios/history-sheet"
                                 "ios/canvas-sheet" "ios/settings-sheet"
-                                "ios/inspector-sheet" "ios/objc-views" "ios/app")))
+                                "ios/editor-sheet" "ios/inspector-sheet" "ios/objc-views" "ios/app")))
     (load (merge-pathnames (format nil "src/~a.lisp" name) *root*)
           :external-format :utf-8)))
 
@@ -1822,6 +1822,39 @@ bound away from the front end's own -- a test has no business writing into
   (fmakunbound 'cl-user::test-hinted)
   (fmakunbound 'cl-user::test-hinted-macro))
 
+(defcase case-editor "The editor's reading of a buffer: the form at the caret, and its package."
+  (let ((text (format nil "(in-package :canvas)~%~%(defun a () 1)~%~%  (defun b ()~%    2)~%; done~%")))
+    (flet ((form-at (offset)
+             (multiple-value-bind (start end) (top-level-form-at text offset)
+               (and start (subseq text start end)))))
+      (check (equal (form-at (search "1)" text)) "(defun a () 1)")
+             "inside a form, that form")
+      (check (equal (form-at (+ (search "(defun a () 1)" text) 14)) "(defun a () 1)")
+             "just after it, the same form: where the caret is once it is typed")
+      (check (equal (form-at (search "2)" text)) (format nil "(defun b ()~%    2)"))
+             "a form over several lines, indented")
+      (check (equal (form-at (1- (length text))) (format nil "(defun b ()~%    2)"))
+             "after the last form and a comment, the last form")
+      (check (null (top-level-form-at "  (a)" 0)) "before the first form, none")
+      (check (null (top-level-form-at "" 0)) "and none in an empty buffer"))
+    (check (eq (buffer-package-at text (search "(defun a" text)) (find-package "CANVAS"))
+           "a form after (in-package :canvas) is read in CANVAS")
+    (check (null (buffer-package-at text 3))
+           "and inside the (in-package ...) itself, no package of the file's yet")
+    (check (null (buffer-package-at "(in-package :no-such-package-here) (x)" 36))
+           "an in-package naming no package names none")
+    (check (null (find-symbol "NO-SUCH-PACKAGE-HERE" "COMMON-LISP-USER"))
+           "and reading the buffer interned nothing in CL-USER"))
+  (let ((path (merge-pathnames (format nil "editor-test-~d.lisp" (get-universal-time))
+                               (uiop:temporary-directory))))
+    (unwind-protect
+         (progn
+           (with-open-file (out path :direction :output :external-format :utf-8)
+             (write-string "(list \"λ\" 1)" out))
+           (check (equal (read-file-text path) "(list \"λ\" 1)")
+                  "a file is read whole, in UTF-8"))
+      (ignore-errors (delete-file path)))))
+
 ;;; ----------------------------------------------------------------------------
 
 (dolist (case '(case-session case-debugger case-use-value case-restart-with-value
@@ -1837,7 +1870,7 @@ bound away from the front end's own -- a test has no business writing into
                 case-prompt-is-recorded
                 case-canvas case-examples case-preferences
                 case-places case-views case-scenes case-inspector
-                case-more-views case-readout case-time-limit case-arglist))
+                case-more-views case-readout case-time-limit case-arglist case-editor))
   (funcall case))
 
 (format t "~&~%headless-test: ~d check~:p, ~d failure~:p~%" *checks* *failures*)

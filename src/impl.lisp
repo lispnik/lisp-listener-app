@@ -289,10 +289,16 @@ ECL never signals a thread to collect garbage, so the question does not arise."
                 view-input-start (setf view-input-start)
                 view-history (setf view-history)
                 view-history-index (setf view-history-index)
-                view-paren-marks (setf view-paren-marks)))
+                view-paren-marks (setf view-paren-marks)
+                ;; :LISTENER or :EDITOR, and an editor view's EDITOR.  See
+                ;; src/editor.lisp.
+                view-role (setf view-role)
+                view-editor (setf view-editor)))
 
 ;;; Defined later in the core than the file that first calls them.  A :SERIAL
 ;;; system tolerates a forward reference; the compile check, which compiles each
 ;;; file on its own, reports one as a style warning without these.
 (declaim (ftype function refresh-paren-highlight clear-paren-highlight
-                utf-16-length inspect-object live-pointer-p))
+                utf-16-length inspect-object live-pointer-p
+                view-reading-package editor-listener
+                type-into-listener load-files-into-listener))

@@ -43,7 +43,7 @@
 ;;; The orders are lisp-listener.asd's, which are :SERIAL.
 (defparameter *core*
   '("package" "impl" "main-thread" "queue" "listener" "history" "sexp" "paredit"
-    "keymap" "indent" "transcript" "completion" "paren-highlight" "arglist" "paredit-view" "history-search"
+    "keymap" "indent" "transcript" "completion" "paren-highlight" "arglist" "editor" "paredit-view" "history-search"
     "streams" "config"
     "restarts" "preferences" "files" "canvas" "places" "views" "inspector"
     "standard-views" "objc-views" "examples" "repl"))
@@ -55,7 +55,7 @@
      "macos/objc-views" "macos/debugger-test" "macos/demo"
      "macos/app")
     ("ios" "ios/view" "ios/restarts-sheet" "ios/history-sheet" "ios/canvas-sheet"
-     "ios/settings-sheet" "ios/inspector-sheet" "ios/objc-views" "ios/app")))
+     "ios/settings-sheet" "ios/editor-sheet" "ios/inspector-sheet" "ios/objc-views" "ios/app")))
 
 (defparameter *front-end*
   (or (second sb-ext:*posix-argv*) "macos"))

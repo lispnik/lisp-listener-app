@@ -38,6 +38,7 @@
                  (:file "completion")
                  (:file "paren-highlight")
                  (:file "arglist")
+                 (:file "editor")
                  (:file "paredit-view")
                  (:file "history-search")
                  (:file "streams")
@@ -102,6 +103,20 @@ an SBCL built --with-sb-safepoint; see the README for why."
                  (:file "demo")
                  (:file "app")))))
 
+(defsystem "lisp-listener/heml"
+  :description "The Lisp Listener with heml, the editor, in its application."
+  :author "Matthew Kennedy <burnsidemk@gmail.com>"
+  :license "MIT"
+  :version "0.1.0"
+  ;; heml's own, with what it needs: iolib (and libfixposix), osicat, prepl.
+  ;; A system of its own so that loading the listener does not need any of it.
+  :depends-on ("lisp-listener" "heml.cocoa")
+  :components ((:module "src/macos"
+                :pathname "src/macos/"
+                :serial t
+                :components ((:file "heml")
+                             (:file "heml-test")))))
+
 (defsystem "lisp-listener/ios"
   :description "The Lisp Listener in a UITextView, for ECL on iOS."
   :author "Matthew Kennedy <burnsidemk@gmail.com>"
@@ -117,6 +132,7 @@ an SBCL built --with-sb-safepoint; see the README for why."
                  (:file "history-sheet")
                  (:file "canvas-sheet")
                  (:file "settings-sheet")
+                 (:file "editor-sheet")
                  (:file "inspector-sheet")
                  (:file "objc-views")
                  (:file "app")))))

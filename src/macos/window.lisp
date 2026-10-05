@@ -375,6 +375,11 @@ and a menu item whose action no longer resolves is one nothing else notices."
            (and target (cffi:pointerp target) (not (cffi:null-pointer-p target))))
          t)))
 
+(defvar *editor-menu-items* '()
+  "What an editor adds to the menus, as (:FILE item...) and (:LISTENER
+item...), each item as ADD-SUBMENU takes them.  src/macos/heml.lisp sets it;
+without heml there is none.")
+
 (defun install-menu (controller)
   (let ((main (objc:invoke (objc:invoke "NSMenu" "alloc") "initWithTitle:" "Main"))
         (application (objc.runloop:shared-application)))
@@ -392,10 +397,12 @@ and a menu item whose action no longer resolves is one nothing else notices."
     ;; Ours too, so the controller: Open... loads into the front listener, and
     ;; Save Transcript... writes the front listener's transcript.
     (add-submenu main "File"
-                 '(("Open…" "listenerOpen:" "o")
-                   ("Save Transcript…" "listenerSaveTranscript:" "S")
-                   :separator
-                   ("Save Canvas…" "listenerSaveCanvas:"))
+                 (append '(("Open…" "listenerOpen:" "o")
+                           ("Save Transcript…" "listenerSaveTranscript:" "S")
+                           :separator
+                           ("Save Canvas…" "listenerSaveCanvas:"))
+                         (let ((items (cdr (assoc :file *editor-menu-items*))))
+                           (and items (cons :separator items))))
                  controller)
     (add-submenu main "Edit"
                  '(("Cut" "cut:" "x")
@@ -414,13 +421,14 @@ and a menu item whose action no longer resolves is one nothing else notices."
     ;; is not retained, and one hung off the first listener would be pointing
     ;; at freed memory the moment that window closed.
     (add-submenu main "Listener"
-                 '(("New Listener" "listenerNewListener:" "n")
-                   :separator
-                   ("History…" "listenerHistory:" "r")
-                   ("Inspect" "listenerInspect:" "i")
-                   :separator
-                   ("Interrupt" "listenerInterrupt:" ".")
-                   ("Clear Transcript" "listenerClearTranscript:" "k"))
+                 (append '(("New Listener" "listenerNewListener:" "n")
+                           :separator
+                           ("History…" "listenerHistory:" "r")
+                           ("Inspect" "listenerInspect:" "i"))
+                         (cdr (assoc :listener *editor-menu-items*))
+                         '(:separator
+                           ("Interrupt" "listenerInterrupt:" ".")
+                           ("Clear Transcript" "listenerClearTranscript:" "k")))
                  controller)
     ;; One item per example, by title; the action finds it again by that title.
     (add-submenu main "Examples"

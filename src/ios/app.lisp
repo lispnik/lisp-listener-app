@@ -895,20 +895,23 @@ A step whose predicate has not held within its time fails."
            (let ((edit (settings-control :init-file)))
              (unless (live-pointer-p edit) (error "Settings has no Edit for init.lisp"))
              (objc:invoke edit "sendActionsForControlEvents:" 64))))
-   (list "in a sheet of its own" (lambda () (init-editor-up-p))
+   (list "in the editor" (lambda () (and (editor-sheet-up-p)
+                                         (equal (namestring (editor-path *editor*))
+                                                (namestring (init-file-path)))))
          (lambda ()
-           (unless (search "init.lisp" (objc:ns-string-to-string
-                                        (objc:invoke *init-editor-text* "text")))
+           (unless (search "init.lisp" (editor-text *editor*))
              (error "the editor does not hold init.lisp"))
-           (objc:invoke *init-editor-text* "setText:"
+           (objc:invoke (editor-pointer *editor*) "setText:"
                         "(defparameter cl-user::*from-init* (* 6 7))")))
    (list :hold nil nil)
-   (list "and Save and Load writes it and loads it at the prompt" (constantly t)
-         (lambda () (save-init-file-from-editor :load t)))
-   (list "which is in force at once, with nothing left on screen"
+   (list "and Load saves it and loads it at the prompt" (constantly t)
+         (lambda () (editor-sheet-load *editor*)))
+   (list "which is in force at once, and the editor is put away"
          (lambda () (and (at-top-level-prompt-p listener)
-                         (boundp 'cl-user::*from-init*)
-                         (not (init-editor-up-p)) (not (settings-sheet-up-p))
+                         (boundp 'cl-user::*from-init*)))
+         (lambda () (hide-editor-sheet)))
+   (list "leaving nothing on screen"
+         (lambda () (and (not (editor-sheet-up-p)) (not (settings-sheet-up-p))
                          (not (live-pointer-p
                                (objc:invoke (objc:invoke (objc:invoke (listener-view listener)
                                                                       "window")
@@ -924,6 +927,47 @@ A step whose predicate has not held within its time fails."
                                            :external-format :utf-8)
                    (write-string saved out))
                  (delete-file path)))))
+   ;; The editor: a file written with the prompt's own paredit and indenter,
+   ;; its forms evaluated at the prompt and their values shown over it.
+   (list "Edit opens the editor on a file" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (let ((path (merge-pathnames "selftest-editor.lisp" (history-directory))))
+             (ignore-errors (delete-file path))
+             (show-editor-sheet path listener))))
+   (list "an empty one, there being no such file yet"
+         (lambda () (and (editor-sheet-up-p)
+                         (search "selftest-editor" (namestring (editor-path *editor*)))))
+         (lambda ()
+           (unless (equal "" (editor-text *editor*))
+             (error "the editor holds ~s" (editor-text *editor*)))
+           (type-into-view (editor-pointer *editor*) "(defun twice (x) (* 2 x))")
+           (unless (equal (editor-text *editor*) "(defun twice (x) (* 2 x))")
+             (error "typing gave ~s" (editor-text *editor*)))
+           (editor-sheet-evaluate *editor*)))
+   (list "a definition typed with paredit's help, and Eval evaluates it at the prompt"
+         (lambda () (search "TWICE" (objc:ns-string-to-string
+                                     (objc:invoke (getf *editor-parts* :result) "text"))))
+         (lambda ()
+           ;; Return in an editor is a new line, not a submission.
+           (type-into-view (editor-pointer *editor*) (format nil "~%(twice 21)"))
+           (unless (search (format nil "~%(twice 21)") (editor-text *editor*))
+             (error "the second line came out as ~s" (editor-text *editor*)))
+           (editor-sheet-evaluate *editor*)))
+   (list :hold nil nil)
+   (list "and the form at the caret, with what it said over the editor"
+         (lambda () (search "42" (objc:ns-string-to-string
+                                  (objc:invoke (getf *editor-parts* :result) "text"))))
+         (lambda ()
+           (unless (editor-dirty-p *editor*) (error "the buffer is not marked changed"))
+           (editor-sheet-save *editor*)
+           (unless (equal (read-file-text (editor-path *editor*)) (editor-text *editor*))
+             (error "the file says ~s" (read-file-text (editor-path *editor*))))
+           (hide-editor-sheet)))
+   (list "Save writes the file, and Close puts the editor away"
+         (lambda () (not (editor-sheet-up-p)))
+         (lambda ()
+           (unless (eql 42 (eval (read-from-string "(cl-user::twice 21)")))
+             (error "TWICE is not defined"))))
    ;; The inspector, as a sheet: a list's elements, changed from its foot.
    (list "(inspect x) at the prompt" (lambda () (at-top-level-prompt-p listener))
          (lambda () (type-line listener "(inspect (list :alpha :beta))")))

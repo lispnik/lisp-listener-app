@@ -64,6 +64,6 @@ or take whatever output has arrived on the prompt's line since."
 True when it did; NIL, with the caret above the prompt, leaves the key to the
 toolkit."
   (let ((*indent-first-column* (input-first-column view pointer))
-        (*indent-package* (listener-completion-package
-                           (listener-for-view-object view))))
+        (*indent-package* (view-reading-package view pointer
+                                                (listener-for-view-object view))))
     (run-command-at-caret view pointer 'newline-and-indent)))

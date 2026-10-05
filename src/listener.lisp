@@ -97,7 +97,12 @@ other one and the first in the list would answer for all of them."
 
 Compared with EQL, which works where pointer comparison does not: the bridge
 hands an IMP the same Lisp object every time."
-  (and object (find object *listeners* :key #'listener-view-object)))
+  (and object
+       (if (eq (view-role object) :editor)
+           ;; An editor speaks for the listener its forms are evaluated in.
+           (let ((editor (view-editor object)))
+             (and editor (editor-listener editor)))
+           (find object *listeners* :key #'listener-view-object))))
 
 (defparameter *shown-values-kept* 500
   "How many of the values a listener has printed it keeps hold of, so that a

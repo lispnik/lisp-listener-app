@@ -90,11 +90,13 @@ NIL when the caret is outside the input region or there is no token there."
           (let ((length (utf-16-length token)))
             (values token (cons (- caret length) length))))))))
 
-(defun listener-completions (token)
+(defun listener-completions (token &optional view pointer)
   "TOKEN's completions in the listener's package.  None for an empty token:
 Escape after a space would otherwise offer every symbol in the package."
   (and (plusp (length token))
-       (symbol-completions token (listener-completion-package *listener*))))
+       (symbol-completions token (if view
+                                     (view-reading-package view pointer)
+                                     (listener-completion-package *listener*)))))
 
 (defun replace-token (view pointer range string)
   "Replace RANGE with STRING, as input, and put the caret after it."
@@ -129,7 +131,7 @@ Escape after a space would otherwise offer every symbol in the package."
 Returns :INSERTED, :EXTENDED, :LISTED, or NIL when there was nothing to
 complete or nothing it could be."
   (multiple-value-bind (token range) (completion-token view pointer)
-    (let* ((candidates (and token (listener-completions token)))
+    (let* ((candidates (and token (listener-completions token view pointer)))
            (prefix (common-prefix candidates)))
       (cond ((null candidates) nil)
             ((null (rest candidates))

@@ -70,7 +70,12 @@ src/macos/view.lisp.  UIKit has no NSModalPanelRunLoopMode.")
 ;;; The view ------------------------------------------------------------------
 
 (objc:define-objc-class listener-text-view ()
-  ((input-start :initform 0 :accessor view-input-start
+  ((role :initform :listener :accessor view-role
+         :documentation ":LISTENER, the prompt and its transcript; or :EDITOR,
+a file being edited, whose input region is all of it.  See src/editor.lisp.")
+   (editor :initform nil :accessor view-editor
+           :documentation "An editor view's EDITOR.")
+   (input-start :initform 0 :accessor view-input-start
                 :documentation "Index in the text storage where editable text
 begins.  UTF-16 units, thread 1 only.")
    (history :initform '() :accessor view-history
@@ -110,9 +115,9 @@ that they can be untinted.  Thread 1 only; see src/paren-highlight.lisp."))
 (defconstant +ui-key-modifier-alternate+ #x80000)
 (defconstant +ui-view-flexible-width+ 2)
 
-(defun make-listener-view ()
-  "Allocate a LispListenerView set up for Lisp source.
-Returns (VALUES POINTER OBJECT)."
+(defun make-listener-view (&key (role :listener) editor)
+  "Allocate a LispListenerView set up for Lisp source: a listener's, or with
+ROLE :EDITOR, EDITOR's.  Returns (VALUES POINTER OBJECT)."
   (let* ((object (make-instance 'listener-text-view
                                 :init-function
                                 (lambda (pointer &rest initargs)
@@ -121,6 +126,8 @@ Returns (VALUES POINTER OBJECT)."
                                                (vector 0d0 0d0 0d0 0d0)))
                                 :allow-other-keys t))
          (view (objc:objc-object-pointer object)))
+    (setf (view-role object) role
+          (view-editor object) editor)
     (objc:invoke view "setTranslatesAutoresizingMaskIntoConstraints:" nil)
     ;; Every substitution off, for the reason the Mac turns them off: a smart
     ;; quote is not a STRING delimiter, and an autocorrected symbol is a
@@ -139,7 +146,8 @@ Returns (VALUES POINTER OBJECT)."
     (objc:invoke view "setBackgroundColor:"
                  (objc:invoke "UIColor" "systemBackgroundColor"))
     (objc:invoke view "setTypingAttributes:" (transcript-attributes :input))
-    (initialize-view-history object)
+    (when (eq role :listener)
+      (initialize-view-history object))
     ;; Its own delegate, as on the Mac.  The delegate property is weak, and
     ;; the view is held by its superview and by the listener, so nothing more
     ;; is needed to keep it.
@@ -148,12 +156,14 @@ Returns (VALUES POINTER OBJECT)."
       (objc:invoke view "setInputAccessoryView:" bar)
       ;; -setInputAccessoryView: retains it; the +1 from -alloc is ours.
       (objc:release bar))
-    ;; A tap on a printed value opens the inspector on it.  Beside the text
+    ;; A tap on a printed value opens the inspector on it -- in a listener; an
+    ;; editor has no values in it.  Beside the text
     ;; view's own recognizers, not instead of them, which its delegate says --
     ;; an object of its own, NOT the view: a UITextView is a scroll view, the
     ;; delegate of its own pan, and answering for that one too is how to get
     ;; a transcript that scrolls and does something else at once.
-    (let ((tap (objc:invoke (objc:invoke "UITapGestureRecognizer" "alloc")
+    (when (eq role :listener)
+     (let ((tap (objc:invoke (objc:invoke "UITapGestureRecognizer" "alloc")
                             "initWithTarget:action:" view "listenerTap:"))
           (delegate (make-instance 'listener-tap-delegate)))
       (setf (tap-delegate-view delegate) object
@@ -161,7 +171,7 @@ Returns (VALUES POINTER OBJECT)."
       (objc:invoke tap "setCancelsTouchesInView:" nil)
       (objc:invoke tap "setDelegate:" (objc:objc-object-pointer delegate))
       (objc:invoke view "addGestureRecognizer:" tap)
-      (objc:release tap))
+      (objc:release tap)))
     (values view object)))
 
 ;;; A printed value, and a tap on it ----------------------------------------------
@@ -246,7 +256,8 @@ of it: the nearest position to a tap in the margin is still a position."
 
 (defun make-key-bar (object)
   "The row of keys above the on-screen keyboard: Tab, Esc, the arrows, Hist,
-Clear and Stop, each doing what its hardware key does; Try, which lists the
+Clear and Stop, each doing what its hardware key does; Edit, which opens the
+editor (src/ios/editor-sheet.lisp); Try, which lists the
 examples; Open, which loads a file from the Files app; and ⚙, for Settings.
 
 A frame rather than constraints: an input accessory view is sized by the
@@ -293,17 +304,41 @@ mask."
                                                   *listener*)))
                               (funcall function))))
                (objc:invoke stack "addArrangedSubview:" button))))
-      (key "Tab" (lambda () (key-tab object)))
-      (key "Esc" (lambda () (key-escape)))
-      (key "↑" (lambda () (key-arrow object -1)))
-      (key "↓" (lambda () (key-arrow object 1)))
-      (key "Hist" (lambda () (open-history-popup *listener*)))
-      (key "Try" (lambda () (open-examples-popup *listener*)))
-      (key "Open" (lambda () (show-open-picker *listener*)))
-      (key "Clear" (lambda () (clear-transcript *listener*)))
-      (key "Stop" (lambda () (abort-evaluation *listener*)))
-      (key "⚙" (lambda () (show-settings-sheet *listener*))))
+      (if (eq (view-role object) :editor)
+          ;; An editor's: the arrows a phone has not got, and what is done
+          ;; with a file -- evaluate the form at the caret, load it, keep it.
+          (progn
+            (key "Tab" (lambda () (key-tab object)))
+            (key "←" (lambda () (move-caret-character object -1)))
+            (key "→" (lambda () (move-caret-character object 1)))
+            (key "↑" (lambda () (key-arrow object -1)))
+            (key "↓" (lambda () (key-arrow object 1)))
+            (key "Eval" (lambda () (editor-sheet-evaluate (view-editor object))))
+            (key "Load" (lambda () (editor-sheet-load (view-editor object))))
+            (key "Save" (lambda () (editor-sheet-save (view-editor object))))
+            (key "Close" (lambda () (hide-editor-sheet))))
+          (progn
+            (key "Tab" (lambda () (key-tab object)))
+            (key "Esc" (lambda () (key-escape)))
+            (key "↑" (lambda () (key-arrow object -1)))
+            (key "↓" (lambda () (key-arrow object 1)))
+            (key "Hist" (lambda () (open-history-popup *listener*)))
+            (key "Try" (lambda () (open-examples-popup *listener*)))
+            (key "Edit" (lambda () (show-editor-sheet)))
+            (key "Open" (lambda () (show-open-picker *listener*)))
+            (key "Clear" (lambda () (clear-transcript *listener*)))
+            (key "Stop" (lambda () (abort-evaluation *listener*)))
+            (key "⚙" (lambda () (show-settings-sheet *listener*))))))
     bar))
+
+(defun move-caret-character (object direction)
+  "One character left or right, as the arrow keys a phone has not got would."
+  (let* ((pointer (view-pointer object))
+         (caret (caret-index pointer))
+         (length (transcript-length pointer)))
+    (when caret
+      (objc:invoke pointer "setSelectedRange:"
+                   (cons (max (view-input-start object) (min length (+ caret direction))) 0)))))
 
 ;;; What the keys do ------------------------------------------------------------
 ;;;
@@ -322,13 +357,18 @@ mask."
   "Up or down: the history when the caret is on the input's first or last line,
 as on the Mac, and otherwise a line up or down within what is being typed."
   (let ((pointer (view-pointer object)))
-    (if (minusp direction)
+    (cond
+      ;; An editor has no history: an arrow is a line.
+      ((eq (view-role object) :editor)
+       (move-caret-line object pointer direction))
+      ((minusp direction)
         (unless (and (caret-on-first-input-line-p object pointer)
                      (recall-history object pointer -1))
-          (move-caret-line object pointer -1))
+          (move-caret-line object pointer -1)))
+      (t
         (unless (and (caret-on-last-input-line-p object pointer)
                      (recall-history object pointer 1))
-          (move-caret-line object pointer 1)))))
+          (move-caret-line object pointer 1))))))
 
 (defun move-caret-line (view pointer direction)
   "Move the caret one line up or down within the input, keeping its column
@@ -413,7 +453,13 @@ time: a pointer made at load time would not survive into the app.")
                              ;; Option-Return, as on the Mac: a new line,
                              ;; indented, and nothing submitted.
                              (key-command (string #\Return) "listenerNewline:"
-                                          +ui-key-modifier-alternate+)))
+                                          +ui-key-modifier-alternate+)
+                             ;; An editor's: evaluate the form at the caret,
+                             ;; load, save, close.  Nothing in a listener.
+                             (key-command "e" "editorEvaluate:" +ui-key-modifier-command+)
+                             (key-command "l" "editorLoad:" +ui-key-modifier-command+)
+                             (key-command "s" "editorSave:" +ui-key-modifier-command+)
+                             (key-command "w" "editorClose:" +ui-key-modifier-command+)))
                 (objc:invoke array "addObject:" command))
               ;; ⌘0 to ⌘9 choose a restart while the sheet is up, as on the
               ;; Mac.  Harmless otherwise: the IMP does nothing then.
@@ -490,7 +536,21 @@ key in that position on a keyboard attached to an iPad."
 
 ;;; Defined in files that load after this one.
 (declaim (ftype function show-open-picker show-settings-sheet
-                note-canvas-room replace-canvas))
+                note-canvas-room replace-canvas
+                show-editor-sheet hide-editor-sheet note-editor-changed
+                editor-sheet-evaluate editor-sheet-load editor-sheet-save))
+
+(define-listener-method ("editorEvaluate:" :void) ((sender objc:objc-object-pointer))
+  (when (eq (view-role self) :editor) (editor-sheet-evaluate (view-editor self))))
+
+(define-listener-method ("editorLoad:" :void) ((sender objc:objc-object-pointer))
+  (when (eq (view-role self) :editor) (editor-sheet-load (view-editor self))))
+
+(define-listener-method ("editorSave:" :void) ((sender objc:objc-object-pointer))
+  (when (eq (view-role self) :editor) (editor-sheet-save (view-editor self))))
+
+(define-listener-method ("editorClose:" :void) ((sender objc:objc-object-pointer))
+  (when (eq (view-role self) :editor) (hide-editor-sheet)))
 
 ;;; Claiming the key means doing all of its job: on any line of the input this
 ;;; goes to that line's start, and on the first that is after the prompt.  Up
@@ -560,6 +620,10 @@ key in that position on a keyboard attached to an iPad."
      (replacement objc:objc-object-pointer))
   (let ((string (objc:ns-string-to-string replacement)))
     (cond
+      ;; Return, in an editor, breaks the line and indents the new one.
+      ((and (string= string (string #\Newline)) (eq (view-role self) :editor))
+       (insert-indented-newline self pointer)
+       nil)
       ;; Return submits; SUBMIT-INPUT appends the newline itself.
       ((string= string (string #\Newline))
        (submit-input self pointer)
@@ -587,13 +651,15 @@ key in that position on a keyboard attached to an iPad."
     ((text-view objc:objc-object-pointer))
   (apply-typing-attributes pointer)
   (refresh-paren-highlight self pointer)
-  (refresh-arglist-hint self pointer))
+  (refresh-arglist-hint self pointer)
+  (when (eq (view-role self) :editor)
+    (note-editor-changed (view-editor self))))
 
 ;;; What the call being typed takes, on the line over the keys, the argument
 ;;; at the caret in bold and tinted.  See src/arglist.lisp.
 
-(defun show-arglist-hint (listener hint start end)
-  (let* ((object (listener-view-object listener))
+(defun show-arglist-hint (listener hint start end &optional view)
+  (let* ((object (or view (listener-view-object listener)))
          (label (and object (view-hint-label object))))
     (when (live-pointer-p label)
       (if (null hint)

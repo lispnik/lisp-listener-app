@@ -1222,6 +1222,10 @@ argument at the caret."
     (debugger-test-windows listener)
     (debugger-test-inspector listener directory)
     (debugger-test-inspector-more listener directory)
+    ;; heml, when the image has it: src/macos/heml-test.lisp.
+    (let ((heml-test (find-symbol "DEBUGGER-TEST-HEML" "LISP-LISTENER")))
+      (when (and heml-test (fboundp heml-test))
+        (funcall heml-test listener directory)))
     (note "debugger-test: ~:[~d FAILED~;PASS~]"
           (zerop *debugger-test-failures*) *debugger-test-failures*)
     (finish-and-exit (if (zerop *debugger-test-failures*) 0 1))))

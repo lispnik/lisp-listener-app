@@ -23,7 +23,7 @@
   :author "Matthew Kennedy <burnsidemk@gmail.com>"
   :license "MIT"
   :version "0.1.0"
-  :depends-on ("lisp-listener")
+  :depends-on ("lisp-listener/heml")
 
   ;; The iOS app's identifier too: one application, on two platforms.  (It was
   ;; org.lispnik.sbcl-macos.lisp-listener, after the repository's old name.)

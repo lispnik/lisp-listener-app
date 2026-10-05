@@ -47,6 +47,11 @@ env:
   OBJC_REF: master
   MACOS_APP_REPO: lispnik/asdf-macos-app
   MACOS_APP_REF: main
+  # heml, the editor the application hosts (src/macos/heml.lisp).  Its own
+  # dependencies come from its own ocicl.csv, and its vendored ones from its
+  # submodules.
+  HEML_REPO: lispnik/heml
+  HEML_REF: master
   # A pinned release tag, never a branch: a branch name in a cache key stops
   # tracking what it names the moment the branch moves, and the cache then hands
   # back a binary built from something else.
@@ -60,7 +65,7 @@ env:
   # master before it is published, so the checkout has to win.  ASDF takes the
   # first match, so ordering is the whole mechanism.
   CL_SOURCE_REGISTRY: >-
-    ${{ github.workspace }}/lisp-listener-app/:${{ github.workspace }}/objc/:${{ github.workspace }}/asdf-macos-app/:${{ github.workspace }}/lisp-listener-app/ocicl//:
+    ${{ github.workspace }}/lisp-listener-app/:${{ github.workspace }}/objc/:${{ github.workspace }}/asdf-macos-app/:${{ github.workspace }}/heml//:${{ github.workspace }}/lisp-listener-app/ocicl//:
 
 jobs:
   test:
@@ -70,7 +75,7 @@ jobs:
     # minutes and end with "the hosted runner lost communication with the
     # server" -- no logs, no failing check, nothing to tell a hung test from a
     # sick machine.
-    timeout-minutes: 45
+    timeout-minutes: 60
     # For the release step alone: a version tag attaches the built app.
     permissions:
       contents: write
@@ -103,16 +108,25 @@ jobs:
           ref: ${{ env.MACOS_APP_REF }}
           path: asdf-macos-app
 
+      - name: Check out heml beside it
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.HEML_REPO }}
+          ref: ${{ env.HEML_REF }}
+          path: heml
+          submodules: true
+
       - name: Settle on where the safepoint SBCL lives
         # Outside the workspace on purpose: SBCL's own sources must never land
         # on the source registry.  Not under ~/.local either, which is where
         # ocicl puts its binary.
         run: echo "SAFEPOINT_PREFIX=$HOME/sbcl-safepoint" >> "$GITHUB_ENV"
 
-      - name: Install a host SBCL
-        # Only to compile the real one; nothing below runs on it except the
-        # off-macOS checks and ocicl's own installer.
-        run: brew install sbcl
+      - name: Install a host SBCL, and heml's libfixposix
+        # SBCL only to compile the real one; nothing below runs on it except
+        # the off-macOS checks and ocicl's own installer.  libfixposix is
+        # iolib's, which heml needs; the bundle carries a copy of it.
+        run: brew install sbcl libfixposix
 
       - name: Cache the safepoint SBCL
         id: sbcl-cache
@@ -179,6 +193,20 @@ jobs:
             exit 1
           fi
           echo "restored:" && ls ocicl
+          # And heml's, from heml's own lockfile.
+          cd ../heml
+          for attempt in 1 2 3 4 5; do
+            ocicl install 2>&1 | tee "$RUNNER_TEMP/ocicl-heml.log"
+            if ! grep -q "failed to install" "$RUNNER_TEMP/ocicl-heml.log"; then
+              break
+            fi
+            echo "::warning::ocicl install (heml) attempt $attempt did not get every package"
+            sleep 30
+          done
+          if grep -q "failed to install" "$RUNNER_TEMP/ocicl-heml.log"; then
+            echo "::error::ocicl could not install every heml dependency after 5 attempts" >&2
+            exit 1
+          fi
 
       - name: Report the environment
         working-directory: lisp-listener-app
@@ -328,10 +356,12 @@ jobs:
           # every check held, and says which did not.
           export LISP_LISTENER_DEBUGGER_TEST="$RUNNER_TEMP/debugger-test"
           rm -rf "$LISP_LISTENER_DEBUGGER_TEST"
-          perl -e 'alarm shift; exec @ARGV' 240 \
+          # With heml: the driver's last section opens it in this application
+          # and evaluates from it at the prompt (src/macos/heml-test.lisp).
+          perl -e 'alarm shift; exec @ARGV' 420 \
             "$SBCL_SAFEPOINT" --non-interactive \
               --eval '(require :asdf)' \
-              --eval '(asdf:load-system "lisp-listener")' \
+              --eval '(asdf:load-system "lisp-listener/heml")' \
               --eval '(lisp-listener:main)' 2>&1 | tee debugger-test.log
           grep -q "debugger-test: PASS" debugger-test.log \
             || { echo "::error::the debugger pane failed its checks" >&2

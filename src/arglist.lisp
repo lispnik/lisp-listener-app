@@ -153,6 +153,9 @@ is on -- or NIL where the caret is in no call that can be described."
                         (and (>= index 0) (lambda-list-argument lambda-list index))
                         package))))
 
+(defvar *arglist-shown* (make-hash-table :test 'eq)
+  "What each view's hint last said, by the view's Lisp object.")
+
 (defun refresh-arglist-hint (view pointer)
   "Say what the call around the caret takes, or say nothing.  Thread 1, on
 every selection change; a hint is decoration, and may not take the keystroke
@@ -167,12 +170,13 @@ down with it."
                      (when (and input-start caret (>= caret input-start))
                        (let ((text (pending-input view pointer)))
                          (arglist-hint text (utf-16-offset->index text (- caret input-start))
-                                       (listener-completion-package listener))))))
-            ;; Told only of a change: this runs on every caret movement.
+                                       (view-reading-package view pointer listener))))))
+            ;; Told only of a change: this runs on every caret movement.  Kept
+            ;; per VIEW: a listener and an editor of its say different things.
             (let ((shown (list hint start end)))
-              (unless (equal shown (getf (listener-retained listener) :arglist-hint))
-                (setf (getf (listener-retained listener) :arglist-hint) shown)
-                (show-arglist-hint listener hint start end))))))
+              (unless (equal shown (gethash view *arglist-shown*))
+                (setf (gethash view *arglist-shown*) shown)
+                (show-arglist-hint listener hint start end view))))))
     (error (condition)
       (note "arglist hint: ~a" condition)
       nil))

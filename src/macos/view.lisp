@@ -65,7 +65,12 @@ with no partner.  System colours, so both follow the appearance."
 ;;; The view ------------------------------------------------------------------
 
 (objc:define-objc-class listener-text-view ()
-  ((input-start :initform 0 :accessor view-input-start
+  ((role :initform :listener :accessor view-role
+         :documentation ":LISTENER, the prompt and its transcript; or :EDITOR,
+a file being edited, whose input region is all of it.  See src/editor.lisp.")
+   (editor :initform nil :accessor view-editor
+           :documentation "An editor view's EDITOR.")
+   (input-start :initform 0 :accessor view-input-start
                 :documentation "Index in the text storage where editable text
 begins.  UTF-16 units, thread 1 only.")
    (history :initform '() :accessor view-history
@@ -307,8 +312,10 @@ Meta -- which is what a Mac keyboard offers for M-."
 ;;; out of the way of the transcript, and gone when there is nothing to say.
 ;;; A subtitle is plain text, so the argument at the caret is bracketed.
 
-(defun show-arglist-hint (listener hint start end)
-  (let ((window (listener-window listener)))
+(defun show-arglist-hint (listener hint start end &optional view)
+  (let ((window (if view
+                    (objc:invoke (objc:objc-object-pointer view) "window")
+                    (listener-window listener))))
     (when (live-pointer-p window)
       (objc:invoke window "setSubtitle:"
                    (cond ((null hint) "")
