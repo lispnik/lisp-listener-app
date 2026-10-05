@@ -606,14 +606,14 @@ red — "no offenders" is also what an empty scan says.
   `env -u SBCL_HOME` is the workaround.
 - Interrupting with ⌘. a form that is blocked inside a foreign call takes
   effect when the call returns, which is the ordinary SBCL caveat.
-- There is no editor integration. It is a Listener.
 - On iOS, a library loaded with ASDF runs as bytecode: there is no compiler to
   native code on a phone.
 
 ## Privacy
 
-Neither application has any networking code, and nothing you type leaves your
-device. [PRIVACY.md](PRIVACY.md) says what is kept on it, and where.
+Nothing you type leaves your device, and nothing reaches the network unless
+you ask: `(download url)` fetches the address it is given and sends nothing of
+yours. [PRIVACY.md](PRIVACY.md) says what is kept on the device, and where.
 
 ## Licence
 
