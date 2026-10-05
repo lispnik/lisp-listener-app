@@ -115,7 +115,8 @@ an SBCL built --with-sb-safepoint; see the README for why."
                 :pathname "src/macos/"
                 :serial t
                 :components ((:file "heml")
-                             (:file "heml-test")))))
+                             (:file "heml-test")
+                             (:file "heml-demo")))))
 
 (defsystem "lisp-listener/ios"
   :description "The Lisp Listener in a UITextView, for ECL on iOS."

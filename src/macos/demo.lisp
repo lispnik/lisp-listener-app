@@ -26,6 +26,9 @@
 (defvar *demo-captions* '())    ; (start end text), newest first
 (defvar *demo-caption* nil)     ; (start . text) of the caption showing now
 (defvar *demo-count* 0)
+(defvar *demo-overlays* '()
+  "Functions answering another window to lay over the listener's picture when
+it is up.  src/macos/heml-demo.lisp adds heml's.")
 
 (defun demo-path (name)
   (namestring (merge-pathnames name *demo-directory*)))
@@ -82,6 +85,10 @@ already composited in."
     (when (and (live-pointer-p *preferences-window*)
                (objc:invoke-bool *preferences-window* "isVisible"))
       (demo-overlay path *preferences-window* window))
+    (dolist (overlay *demo-overlays*)
+      (let ((other (funcall overlay)))
+        (when (and (live-pointer-p other) (objc:invoke-bool other "isVisible"))
+          (demo-overlay path other window))))
     (push (cons path seconds) *demo-frames*)
     (incf *demo-clock* seconds)))
 
@@ -506,6 +513,11 @@ the captions."
                  "a second debugger level")
     (pump-for 0.4d0) (demo-frame 2.6d0)
     (demo-press "0") (demo-at-prompt) (pump-for 0.3d0) (demo-frame 1.8d0)
+
+    ;; The editor, when the image has it: src/macos/heml-demo.lisp.
+    (let ((editor (find-symbol "DEMO-EDITOR" "LISP-LISTENER")))
+      (when (and editor (fboundp editor))
+        (funcall editor listener)))
 
     (demo-canvas listener)
 

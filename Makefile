@@ -69,12 +69,13 @@ app: src/examples.lisp
 
 ## A captioned video of a session in the real window, typed a key at a time:
 ## build/demo/lisp-listener-demo.mp4.  Needs ffmpeg (with libass) and
-## ImageMagick; see src/macos/demo.lisp and tools/make-demo.sh.
+## ImageMagick; see src/macos/demo.lisp and tools/make-demo.sh.  With heml, so
+## that the editor is in it (src/macos/heml-demo.lisp).
 demo:
 	rm -rf build/demo
 	LISP_LISTENER_DEMO=$(CURDIR)/build/demo $(SBCL) --non-interactive \
 	    --eval '(require :asdf)' \
-	    --eval '(asdf:load-system "lisp-listener")' --eval '(lisp-listener:main)'
+	    --eval '(asdf:load-system "lisp-listener/heml")' --eval '(lisp-listener:main)'
 	tools/make-demo.sh build/demo
 
 ## The examples are read into the image when src/examples.lisp is COMPILED.

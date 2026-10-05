@@ -146,7 +146,7 @@ order is load-bearing**:
   history-sheet canvas-sheet settings-sheet editor-sheet inspector-sheet
   objc-views app`.
 - `lisp-listener/heml` — `lisp-listener` plus heml (`heml.cocoa`) and
-  `src/macos/`: `heml heml-test`. **The application depends on this one**
+  `src/macos/`: `heml heml-test heml-demo`. **The application depends on this one**
   (`lisp-listener-app.asd`); the library and `make run` do not, so the
   listener still loads with none of heml's dependencies (iolib and its
   libfixposix, osicat, prepl). asdf-macos-app bundles `libfixposix` and
@@ -438,6 +438,12 @@ NSTextView and UITextView share.
   menu bar left alone, Evaluate Defun reaching the prompt, an error from it
   opening the debugger, `(ed 'name)`, close and Show Editor, quit. heml's own
   test of the hosted mode is `make smoke-hosted` in heml.
+- `src/macos/heml-demo.lisp` — the demo's editor scene, which `run-demo` plays
+  when the image has it (`make demo` loads `lisp-listener/heml`): `(ed
+  "greet.lisp")`, an edit typed into heml, Evaluate Defun redefining at the
+  prompt the `greet` the demo defined there, and the new one called. heml's
+  window goes over the top of the listener's and is composited in through
+  `*demo-overlays*`.
 - `src/ios/editor-sheet.lisp` and `src/editor.lisp` — the iOS editor. The
   editor is a `listener-text-view` whose `role` is `:editor` and whose input
   region starts at 0, so paredit, the indenter, completion, the paren tint and
