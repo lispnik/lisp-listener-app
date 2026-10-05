@@ -388,6 +388,82 @@ example's contributed view and controls."
   (hide-canvas)
   (pump-for 0.3d0))
 
+(defparameter *demo-turtle-gallery*
+  '(("snowflake" "(snowflake 4)")
+    ("hilbert" "(hilbert 5)")
+    ("arrowhead" "(arrowhead 7)")
+    ("plant" "(plant 5)")
+    ("rosette" "(progn (clear) (pen 1.2) (dotimes (i 36) (hue (/ i 36) 0.7 1) (arc 70 60) (left 120) (arc 70 60) (left 120) (right 10)))"))
+  "What the demo draws with the L-systems example's functions, and the name
+each picture is saved under in turtle/, for the gallery `make demo' makes.")
+
+(defun demo-save-still (name)
+  "The canvas as a picture, without the turtle, as turtle/NAME.png."
+  (let ((path (demo-path (format nil "turtle/~a.png" name))))
+    (ensure-directories-exist path)
+    (let ((*canvas-paint-turtle* nil))
+      (save-canvas-png path))))
+
+(defun demo-watch-turtle (listener example &key (scale 5))
+  "Run EXAMPLE and photograph the turtle drawing it.  WAIT is SCALE times
+slower than it says, so that the photographs keep up; each frame is shown for
+the time it took over SCALE, which is the drawing at its own speed."
+  (setf *canvas-time-scale* scale)
+  (unwind-protect
+       (progn
+         (run-example-in-listener listener example)
+         (demo-expect (wait-for (lambda () (not (waiting-at-top-level-p listener))) :timeout 10)
+                      (format nil "~a to start" example))
+         (let ((last (get-internal-real-time))
+               (deadline (+ (get-universal-time) 180)))
+           (loop
+             (pump 0.04d0)
+             (let ((now (get-internal-real-time)))
+               (demo-frame (/ (- now last) internal-time-units-per-second scale 1d0))
+               (setf last now))
+             (when (waiting-at-top-level-p listener)
+               (return))
+             (demo-expect (< (get-universal-time) deadline) (format nil "~a to finish" example)))))
+    (setf *canvas-time-scale* 1))
+  (pump-for 0.3d0)
+  (demo-frame 2.0d0))
+
+(defun demo-turtle (listener)
+  "The turtle watched drawing a flower, then the L-systems, each saved for the
+gallery."
+  (demo-place-canvas (listener-window listener))
+  (demo-caption "The turtle can be watched: it walks, fills what it walks round, and stamps")
+  (demo-watch-turtle listener "turtle")
+  (demo-caption "An L-system is a string rewritten again and again, then walked by the turtle")
+  (let ((before (length (transcript-text listener))))
+    (run-example-in-listener listener "lsystem")
+    (demo-drawn-at-prompt "the dragon curve" before))
+  (demo-save-still "dragon")
+  (demo-frame 2.6d0)
+  (dolist (entry *demo-turtle-gallery*)
+    (demo-type (second entry) :per-key (if (> (length (second entry)) 30) 0.02d0 0.06d0))
+    (let ((before (length (transcript-text listener))))
+      (objc:invoke (demo-view) "insertNewline:" (cffi:null-pointer))
+      (demo-drawn-at-prompt (first entry) before))
+    (demo-save-still (first entry))
+    (demo-frame 1.8d0))
+  (hide-canvas)
+  (pump-for 0.3d0))
+
+(defun demo-drawn-at-prompt (what before)
+  "Wait for a prompt after the transcript's first BEFORE characters -- the
+form has been evaluated -- and the canvas to have been painted since."
+  (let ((paints *canvas-paints*))
+    (demo-expect (wait-for (lambda () (and (search "CL-USER> " (transcript-text *listener*)
+                                                   :start2 before)
+                                           (waiting-at-top-level-p *listener*)))
+                           :timeout 60)
+                 what)
+    (demo-expect (wait-for (lambda () (and (canvas-visible-p) (> *canvas-paints* paints)))
+                           :timeout 20)
+                 (format nil "~a painted" what)))
+  (pump-for 0.3d0))
+
 (defun demo-write-lists ()
   "The ffmpeg concat list -- the last frame named twice, as ffmpeg wants -- and
 the captions."
@@ -520,6 +596,8 @@ the captions."
         (funcall editor listener)))
 
     (demo-canvas listener)
+
+    (demo-turtle listener)
 
     (demo-inspector listener)
 

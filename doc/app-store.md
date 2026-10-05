@@ -28,8 +28,9 @@ anywhere and no account is needed.
 - Stop interrupts a form that is still running.
 - There is a canvas to draw on: (circle 0 0 50). On an iPad it sits beside
   the transcript; on a phone it is a sheet. It takes a finger, too.
-- Try lists thirteen short examples -- a spiral, a fractal tree, the Mandelbrot
-  set, Conway's Life, Snake, Pong -- each a screen of Lisp to read and change.
+- Try lists fifteen short examples -- a spiral, a flower a turtle draws while
+  you watch, L-systems, a fractal tree, the Mandelbrot set, Conway's Life, Snake, Pong --
+  each a screen of Lisp to read and change.
 - (inspect x) opens an inspector: a byte vector as a histogram or as hex, a
   table's entries, an object's slots. Tap a row to change it or walk into it.
 - Open loads a .lisp file from the Files app, and Files can open one in Lisp
@@ -142,12 +143,13 @@ A DEBUGGER, NOT A CRASH
 
 A CANVAS TO DRAW ON
 • (circle 0 0 50) draws a circle. So do lines, dots, boxes, text, the graph of a function, and a turtle that walks forward and turns.
+• Watch the turtle draw: (turtle-speed 1) slows it down, (filled ...) fills what it walks round, (arc 40) walks a circle, and (stamp) leaves a copy of it.
 • On an iPad the canvas sits beside the transcript, so you type a form and watch what it draws. On an iPhone it is a sheet.
 • (frame ...) and (wait ...) animate. (key) reads the arrows under the canvas and (pointer) reads your finger, so a game is a page of code.
 • (save "mine.png") keeps the picture, in the app's folder in Files.
 
-THIRTEEN EXAMPLES TO TAKE APART
-• A rainbow spiral, a rose curve, a fractal tree, Sierpinski's triangle, the Mandelbrot set, a clock, bouncing balls, Conway's Life, a doodle, Snake, Pong and a simulated hot plate.
+FIFTEEN EXAMPLES TO TAKE APART
+• A rainbow spiral, a flower the turtle draws while you watch, L-systems (the dragon curve, Koch's snowflake, Hilbert's curve, a fractal plant), a rose curve, a fractal tree, Sierpinski's triangle, the Mandelbrot set, a clock, bouncing balls, Conway's Life, a doodle, Snake, Pong and a simulated hot plate.
 • Each is a screen of Lisp. Run one, read it, or put it at the prompt and change it.
 
 AN INSPECTOR
@@ -208,5 +210,6 @@ Already answered in the bundle: `ITSAppUsesNonExemptEncryption` is false.
 | 0.1.61 | (inspect x), printed as text; a thirteenth example |
 | 0.1.62 | the inspector as a sheet: views, options and controls, Set, Insert, Remove and Add, a readout under a finger |
 | 0.1.70 | a tap on a printed value inspects it; Views lists every view; values are no longer blue or printed twice; a sheet can no longer be left up; argument hints; (download url); init.lisp from Settings; ASDF; the editor |
+| next | turtle graphics: the turtle drawn and watched, (turtle-speed), arc, filled, stamp, go-to and set-heading; two more examples, the flower and L-systems |
 
-Everything above describes 0.1.70. Do not paste it over an older one.
+Everything above describes the next build. Do not paste it over an older one.

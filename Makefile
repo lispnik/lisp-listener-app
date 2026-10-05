@@ -70,13 +70,16 @@ app: src/examples.lisp
 ## A captioned video of a session in the real window, typed a key at a time:
 ## build/demo/lisp-listener-demo.mp4.  Needs ffmpeg (with libass) and
 ## ImageMagick; see src/macos/demo.lisp and tools/make-demo.sh.  With heml, so
-## that the editor is in it (src/macos/heml-demo.lisp).
+## that the editor is in it (src/macos/heml-demo.lisp).  The turtle's pictures
+## are saved as it goes, and made into build/demo/turtle-gallery.png.
 demo:
 	rm -rf build/demo
 	LISP_LISTENER_DEMO=$(CURDIR)/build/demo $(SBCL) --non-interactive \
 	    --eval '(require :asdf)' \
 	    --eval '(asdf:load-system "lisp-listener/heml")' --eval '(lisp-listener:main)'
 	tools/make-demo.sh build/demo
+	cd build/demo/turtle && magick \( dragon.png snowflake.png hilbert.png -resize 400x400 +append \) \
+	    \( arrowhead.png plant.png rosette.png -resize 400x400 +append \) -append ../turtle-gallery.png
 
 ## The examples are read into the image when src/examples.lisp is COMPILED.
 ## ASDF knows that -- lisp-listener.asd names them as static files -- but

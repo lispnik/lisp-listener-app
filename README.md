@@ -132,7 +132,9 @@ way, with y going up.
 |---|---|
 | shapes | `line` `dot` `circle` `rect` `box` `text`, and `plot` and `curve` for a function |
 | the pen | `color` (`:red`, or three numbers), `hue` for the rainbow, `pen` for the width |
-| a turtle | `forward` `back` `left` `right` `pen-up` `pen-down` `home` `move-to` |
+| a turtle | `forward` `back` `left` `right` `arc` `go-to` `set-heading` `pen-up` `pen-down` `home` `move-to` |
+| what it knows | `(pos)` `(heading)` `(towards x y)` `(distance-to x y)` |
+| what it leaves | `(filled ...)` fills the shape the turtle walks round, and `(stamp)` leaves a copy of the turtle |
 | animation | `(frame ...)` draws one whole picture in place of the last, and `(wait 0.1)` pauses |
 | games | `(key)` answers the next key pressed in the canvas — `:left`, `:space`, `#\q` — or `nil` |
 | the mouse, or a finger | `(pointer)` answers where it is and whether it is down — a mouse is followed with its button up, too — and a press is also the key `:click` |
@@ -141,8 +143,38 @@ way, with y going up.
 They are ordinary functions in a package called `canvas`, imported into
 `cl-user` when a listener starts, and each has a docstring.
 
-Thirteen short programs come with it, in the **Examples** menu (the **Try** key
-on a phone): a face, the spiral, a rose curve, a tree made of smaller trees,
+![The turtle part way round a flower's third petal, its outline traced and the first two filled](doc/turtle.png)
+
+**The turtle can be watched.** It is drawn on the canvas, an arrow where it
+stands and facing its way, once you use it. `(turtle-speed 1)` makes it walk
+and turn slowly enough to follow, `10` quickly, and `0` — where it starts —
+draws at once. `(hide-turtle)` and `(show-turtle)` put it away and bring it
+back. The turtle is drawn over the picture, not in it, so `(save …)` saves the
+drawing without it.
+
+```lisp
+(turtle-speed 3)
+(color :orange)
+(filled (dotimes (i 5) (forward 80) (right 144)))   ; a star, filled
+(arc 40)                                            ; a circle on its left
+```
+
+![The dragon curve, a filled Koch snowflake, a Hilbert curve, Sierpinski's arrowhead, a fractal plant and a rosette of arcs, each drawn by the turtle](doc/turtle-gallery.png)
+
+**L-systems** are the turtle's classic: a string rewritten again and again by
+a few rules, then walked — `F` forward, `+` and `-` a turn, `[` and `]` a place
+remembered and gone back to. `(example "lsystem")` defines `l-system`, which
+walks the result once with the pen up to see how big it comes out and then
+draws it to fill the canvas, and five of them: `(dragon 12)`, `(snowflake 4)`,
+`(hilbert 5)`, `(arrowhead 7)` and `(plant 5)`. Rules of your own are a list:
+
+```lisp
+(l-system "F" '((#\F . "F+F-F-F+F")) 4 90)        ; Koch's squares
+```
+
+Fifteen short programs come with it, in the **Examples** menu (the **Try** key
+on a phone): a face, the spiral, a flower the turtle draws while you watch,
+L-systems, a rose curve, a tree made of smaller trees,
 Sierpinski's triangle from a coin with three sides, the Mandelbrot set, a
 clock, bouncing balls, Conway's Life, a doodle to draw with the mouse or a
 finger, Snake, Pong, and a hot plate that teaches the inspector a view of its

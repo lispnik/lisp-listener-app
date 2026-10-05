@@ -75,6 +75,9 @@
    #:line #:dot #:circle #:rect #:box #:text #:plot #:curve
    ;; A turtle.
    #:forward #:back #:left #:right #:pen-up #:pen-down #:home #:move-to
+   #:go-to #:set-heading #:arc #:filled #:stamp
+   #:pos #:heading #:towards #:distance-to
+   #:turtle-speed #:show-turtle #:hide-turtle
    ;; Animation and games.
    #:frame #:wait #:key #:pointer))
 

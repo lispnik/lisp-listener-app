@@ -56,6 +56,8 @@
                  ;; so that changing one compiles it again.
                  (:static-file "hello" :pathname "../examples/hello.lisp")
                  (:static-file "spiral" :pathname "../examples/spiral.lisp")
+                 (:static-file "turtle" :pathname "../examples/turtle.lisp")
+                 (:static-file "lsystem" :pathname "../examples/lsystem.lisp")
                  (:static-file "rose" :pathname "../examples/rose.lisp")
                  (:static-file "tree" :pathname "../examples/tree.lisp")
                  (:static-file "life" :pathname "../examples/life.lisp")

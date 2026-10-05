@@ -277,6 +277,18 @@ NSTextView and UITextView share.
   (`canvas-pointer-event`) and a press is also the key `:click`. `(save
   "x.svg")` writes the display list out, all here; `(save "x.png")` is the
   front end's `save-canvas-png`, on thread 1, waited for.
+  **The turtle is painted over the drawing, not into it**: its commands keep
+  `*turtle-sprite*` (where it is, and the line it is part way along) and
+  `paint-canvas` appends `turtle-sprite-ops` to the display list it paints,
+  so `canvas-contents`, SVG and a saved PNG (`*canvas-paint-turtle*`, bound
+  NIL by `save`) are the drawing alone; it shows once a turtle command runs
+  after `clear`, and never in a frame. `(turtle-speed n)` -- not `speed`,
+  which CL-USER inherits from CL -- walks and turns in steps of
+  `*turtle-frame-seconds*` through `wait`, so a test's time scale of 0 makes
+  watching free. `(filled ...)` collects the turtle's points and puts a
+  `:polygon` UNDER what was drawn since it began (`canvas-add-beneath`), and
+  `(stamp)` adds one; `:polygon` is a shape like the others, in both painters
+  and in SVG.
 - **The inspector**, five files, all toolkit-free. The names a contributor
   types are a third package, `INSPECTOR`, defined from inside `LISP-LISTENER`
   as `CANVAS` is, and **not** imported into `CL-USER` (`text` is the canvas's).
@@ -340,7 +352,7 @@ NSTextView and UITextView share.
     a window's opacity and title) and `src/ios/objc-views.lisp` (a `UIImage`).
 - `src/examples.lisp` — `(examples)`, `(example "snake")`,
   `(example-source "snake")`, and `(example-edit "snake")`, which puts the
-  source at the prompt. The twelve programs are `examples/*.lisp`, **read
+  source at the prompt. The fifteen programs are `examples/*.lisp`, **read
   into the image as strings when this file is compiled** (`embedded-examples`):
   an app has no source tree beside it. Run by reading and evaluating each form
   in `CL-USER` on the listener thread; the Examples menu and the Try key only
@@ -469,7 +481,12 @@ NSTextView and UITextView share.
   scene chooses rows already in sight. `doc/inspector-more.png` is two of its
   frames; `doc/ios-inspector.png` is three iPhone screenshots from the
   self-test. `tools/make-gif.sh` cuts the README's `doc/canvas.gif`
-  out of the video by caption. CI makes it only on Run workflow
+  out of the video by caption. The turtle's scene (`demo-turtle`) watches the
+  flower drawn -- `*canvas-time-scale*` slows it so the photographs keep up,
+  and each frame is shown for its time over that scale -- then draws the
+  L-systems, saving each without the turtle into `turtle/`, which `make demo`
+  makes into `build/demo/turtle-gallery.png`; `doc/turtle-gallery.png` is a
+  copy, and `doc/turtle.png` one of the flower's frames. CI makes it only on Run workflow
   (`workflow_dispatch`), arm64.
 - `src/macos/debugger-test.lisp` — `LISP_LISTENER_DEBUGGER_TEST=<dir>` drives the
   docked debugger through what a person does with it and checks each step:
