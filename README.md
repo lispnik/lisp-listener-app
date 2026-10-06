@@ -444,7 +444,11 @@ sbcl --noinform --non-interactive \
 ```sh
 make app          # => build/Lisp Listener.app
 open "build/Lisp Listener.app"
+make install-app  # build it, then replace /Applications/Lisp Listener.app
 ```
+
+`install-app` copies to `INSTALL_DIR`, `/Applications` unless you say
+otherwise (`make install-app INSTALL_DIR=~/Applications`).
 
 **Run `make app` with the safepoint SBCL itself.** `asdf-macos-app` copies the
 runtime of whichever SBCL performs the build into `Contents/MacOS/`, so

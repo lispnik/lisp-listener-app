@@ -31,6 +31,7 @@ make deps           # ocicl install -- restores ./ocicl/ from ocicl.csv
 make check          # all three off-macOS checks; the listener runs on SBCL and ECL
 make run            # a listener from a REPL, on thread 1
 make app            # => build/Lisp Listener.app
+make install-app    # make app, then copy it over /Applications/Lisp Listener.app (INSTALL_DIR)
 make demo           # => build/demo/lisp-listener-demo.mp4 (needs ffmpeg, ImageMagick)
 
 make ios-toolchain  # once: asdf-ios-app builds the host and iOS ECLs (~10 min)

@@ -8,7 +8,7 @@ SBCL ?= sbcl
 # Signing, which is personal: local.mk, never committed.  See doc/testflight.md.
 -include local.mk
 
-.PHONY: deps check syntax-check compile-check test test-ecl run app demo ios-demo \
+.PHONY: deps check syntax-check compile-check test test-ecl run app install-app demo ios-demo \
         ios-device ipa testflight \
         ios-toolchain ios run-ios test-ios clean
 
@@ -69,6 +69,15 @@ run: src/examples.lisp
 ## safepoint build exists to remove.
 app: src/examples.lisp
 	$(SBCL) --eval '(asdf:make "lisp-listener-app")' --quit
+
+## Build the bundle and put it in INSTALL_DIR (/Applications), replacing the
+## one there, as heml's install-app does.  Quit the running one first.
+INSTALL_DIR ?= /Applications
+install-app: app
+	@mkdir -p "$(INSTALL_DIR)"
+	rm -rf "$(INSTALL_DIR)/Lisp Listener.app"
+	cp -R "build/Lisp Listener.app" "$(INSTALL_DIR)/"
+	@echo "installed $(INSTALL_DIR)/Lisp Listener.app"
 
 ## A captioned video of a session in the real window, typed a key at a time:
 ## build/demo/lisp-listener-demo.mp4.  Needs ffmpeg (with libass) and
