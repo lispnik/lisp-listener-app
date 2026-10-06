@@ -576,13 +576,23 @@ and CL:ABORT with nothing to abort to signals CONTROL-ERROR."
     (when (and thread (bt:thread-alive-p thread))
       (let ((queue (listener-input listener)))
         (or (queue-request-abort-if-waiting queue)
-            (bt:interrupt-thread
-             thread
-             (lambda ()
-               ;; Never an abort from inside the wait: there it is lost and the
-               ;; lock is left wrong.  This thread reached the wait after the
-               ;; test above found it computing, so it asks itself instead.
-               (if *in-queue-wait*
-                   (queue-request-abort-from-wait queue)
-                   (ignore-errors (abort)))))))
+            ;; A thread that ends between THREAD-ALIVE-P and here has nothing
+            ;; to abort, and interrupting it is an error.  Closing a window
+            ;; does exactly that: its end of file lets the thread finish, and
+            ;; the error took the rest of -windowWillClose: with it, so the
+            ;; listener was never unregistered -- once on CI's arm64.
+            (handler-case
+                (bt:interrupt-thread
+                 thread
+                 (lambda ()
+                   ;; Never an abort from inside the wait: there it is lost and
+                   ;; the lock is left wrong.  This thread reached the wait
+                   ;; after the test above found it computing, so it asks
+                   ;; itself instead.
+                   (if *in-queue-wait*
+                       (queue-request-abort-from-wait queue)
+                       (ignore-errors (abort)))))
+              (error ()
+                (when (bt:thread-alive-p thread)
+                  (note "abort-evaluation: could not interrupt a running thread"))))))
       t)))
