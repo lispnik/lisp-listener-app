@@ -124,8 +124,17 @@ it is waiting at a prompt again; give up after ten seconds."
          (cond ((> seconds 10)
                 (objc:invoke label "setText:" "still running; the transcript will have it")
                 (objc:invoke timer "invalidate"))
-               ((and (listener-prompt listener)
-                     (> (transcript-length pointer) before))
+               ;; A prompt AFTER what was typed.  The form typed at the prompt
+               ;; is in the transcript at once, and until the listener thread
+               ;; reads it the old prompt is still the recorded one: asking
+               ;; only for a prompt and a longer transcript, a busy iPad showed
+               ;; the form itself as its result, and never looked again.
+               ((let ((prompt (listener-prompt listener)))
+                  (and prompt
+                       (> (transcript-length pointer) before)
+                       (string= prompt (last-line-of (transcript-substring
+                                                      pointer before
+                                                      (- (transcript-length pointer) before))))))
                 (let* ((written (transcript-substring pointer before
                                                       (- (transcript-length pointer) before)))
                        (debugger (search "[1]" (last-line-of written))))
