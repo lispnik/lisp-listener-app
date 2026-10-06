@@ -10,7 +10,7 @@
 ;;;; meets the first GRAY-STREAMS: symbol.
 
 (defpackage #:lisp-listener
-  (:use #:cl)
+  (:use #:cl #:sexp-edit)
   (:local-nicknames (#:gray-streams #+sbcl #:sb-gray #+ecl #:gray))
   (:export
    ;; Entry points.

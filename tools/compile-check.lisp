@@ -42,8 +42,8 @@
 
 ;;; The orders are lisp-listener.asd's, which are :SERIAL.
 (defparameter *core*
-  '("package" "impl" "main-thread" "queue" "listener" "history" "sexp" "paredit"
-    "keymap" "indent" "transcript" "completion" "paren-highlight" "arglist" "editor" "paredit-view" "history-search"
+  '("package" "impl" "main-thread" "queue" "listener" "history"
+    "keymap" "transcript" "completion" "paren-highlight" "arglist" "editor" "paredit-view" "history-search"
     "streams" "config"
     "restarts" "preferences" "files" "canvas" "places" "views" "inspector"
     "standard-views" "objc-views" "examples" "repl"))
@@ -73,6 +73,8 @@
 (handler-bind ((warning #'muffle-warning))
   (load (merge-pathnames "tools/stubs/stubs.lisp" *root*)
         :external-format :utf-8))
+(handler-bind ((warning #'muffle-warning))
+  (load (merge-pathnames "tools/sexp-edit.lisp" *root*) :external-format :utf-8))
 
 (ensure-directories-exist *output*)
 

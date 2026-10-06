@@ -52,6 +52,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: lisp-listener-app
+          submodules: true
 
       - name: Check out asdf-ios-app beside it
         uses: actions/checkout@v7

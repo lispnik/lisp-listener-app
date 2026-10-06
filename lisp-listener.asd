@@ -15,12 +15,20 @@
 ;;;; asdf-macos-app a hard requirement for anyone who only wants to load the
 ;;;; library.  utc-status-app carries the bug report that taught this.
 
+;;; Structural editing is lispnik/sexp-edit, shared with heml, and a submodule
+;;; (vendor/sexp-edit).  *CENTRAL-REGISTRY* is searched before any other source
+;;; of systems.  Not when one is already known: lisp-listener/heml loads heml,
+;;; whose .asd has the same submodule, and the copy loaded first is the one.
+(unless (asdf:registered-system "sexp-edit")
+  (pushnew (merge-pathnames "vendor/sexp-edit/" (directory-namestring *load-truename*))
+           asdf:*central-registry* :test #'equal))
+
 (defsystem "lisp-listener/core"
   :description "The Lisp Listener's toolkit-free half, for SBCL and ECL."
   :author "Matthew Kennedy <burnsidemk@gmail.com>"
   :license "MIT"
   :version "0.1.0"
-  :depends-on ("objc" "bordeaux-threads")
+  :depends-on ("objc" "bordeaux-threads" "sexp-edit")
   :components ((:module "src"
                 :serial t
                 :components
@@ -30,10 +38,7 @@
                  (:file "queue")
                  (:file "listener")
                  (:file "history")
-                 (:file "sexp")
-                 (:file "paredit")
                  (:file "keymap")
-                 (:file "indent")
                  (:file "transcript")
                  (:file "completion")
                  (:file "paren-highlight")

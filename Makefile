@@ -21,8 +21,11 @@ ECL ?= ecl
 ## every machine and every run.  It covers objc and asdf-macos-app as well, so
 ## a fresh clone needs no sibling checkouts -- see the README.
 ##
+## sexp-edit, the structural editing heml shares, is a submodule instead.
+##
 ## Needs the ocicl tool itself: https://github.com/ocicl/ocicl
 deps:
+	git submodule update --init
 	ocicl install
 
 ## All three off-macOS checks.  The first two cannot tell you the program

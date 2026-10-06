@@ -136,7 +136,7 @@ Three systems in `lisp-listener.asd`, each `:serial t`, and **the component
 order is load-bearing**:
 
 - `lisp-listener/core` — `src/`: `package impl main-thread queue listener history
-  sexp paredit keymap indent transcript completion paren-highlight arglist paredit-view
+  keymap transcript completion paren-highlight arglist paredit-view
   history-search streams config restarts preferences files canvas places views
   inspector standard-views objc-views examples repl`. No toolkit; SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
@@ -153,7 +153,8 @@ order is load-bearing**:
   `libosicat` in `Contents/Frameworks`; the core is about 75 MB with heml.
 
 `tools/compile-check.lisp` and `tools/headless-test.lisp` each carry the same
-lists by hand; a new file has to be added in all three places. The core also
+lists by hand; a new file has to be added in all three places. Both load
+sexp-edit first, from its sources, through `tools/sexp-edit.lisp`. The core also
 names `examples/*.lisp` as static files ahead of `examples`, which is what
 makes ASDF compile it again when one changes.
 
@@ -179,26 +180,33 @@ NSTextView and UITextView share.
   `save-lisp-and-die` and the bundle is a dumped core.
 - `src/transcript.lisp` — the transcript primitives over either text view, and
   the `define-listener-method` macro (every IMP wrapped in `handler-case`).
-- `src/sexp.lisp` — the sexp scanner, **copied from `revl`** (lispnik's own MIT
-  editor) and renamed: paren matching and the structural edits, over a string and
-  a character offset. Every scan asks `skip-non-code` first, so they all agree on
-  what is not code: `;` comments, strings, nested `#|…|#`, `|symbols|` (spaces
-  and parens included), `#\(` and `\(`. `[` and `{` are constituents, as in
-  standard syntax. The two copies are now separate.
-- `src/paredit.lisp` — the commands, each `(text offset) → (values text offset)`
-  or NIL to decline. Balanced insertion is written here; the structural ones wrap
-  `apply-structural-edit`. Pure, so `make test` covers all of it.
-- `src/keymap.lisp` — `*paredit-enabled*`, `*paren-highlight-enabled*`,
-  `*auto-indent-enabled*` and `*paredit-keys*`, an alist of key spec (`"("`, `"C-)"`, `"C-M-f"`,
-  `"Backspace"`) to command. `(setf (paredit-key "C-(") 'slurp-backward)` rebinds;
-  a command not in `*paredit-commands*` is refused.
-- `src/indent.lisp` — `newline-and-indent`, a command of the same shape: a body
-  form two in, a call under its first argument, anything else one in. Whether an
-  operator takes a body is asked of the live image (`&body` in the macro's lambda
-  list, through `macro-lambda-list` in `impl.lisp`), with a table for special
-  operators and Emacs's `def…` rule. Option-Return on both front ends: AppKit
-  already sends it to `-insertNewlineIgnoringFieldEditor:`, and iOS has a
-  `UIKeyCommand`. Plain Return still submits.
+- **Structural editing is `vendor/sexp-edit`** (lispnik/sexp-edit, a submodule:
+  `git submodule update --init`), which heml uses too, so a key does the same
+  thing at the prompt, in the iOS editor and in heml. `lisp-listener.asd` pushes
+  it onto `asdf:*central-registry*` unless a `sexp-edit` is already registered
+  (heml's own copy, when `lisp-listener/heml` loads heml); the core depends on it,
+  and the package uses `sexp-edit`, so its symbols read here as before. It holds
+  the scanner (from revl: `skip-non-code` decides what is not code -- `;`
+  comments, strings, nested `#|…|#`, `|symbols|`, `#\(`, `#\Newline` as one
+  token, `\(`), the commands, each `(text offset) → (values text offset)` or NIL
+  to decline (Backspace after a matched `)` and Delete before a matched `(` move
+  inside it; an empty pair goes whole; an unmatched paren is deleted), the key
+  table `*paredit-keys*` with `(setf paredit-key)`, `*paredit-enabled*` and
+  `*auto-indent-enabled*`, and the indenter, `newline-and-indent` and
+  `indentation-at` (heml's and the Listener's merged: a body two in, a call under
+  its first argument, `flet`'s functions like a `defun`, a line under the previous
+  element that begins one, `&body` from the live macro's lambda list). Its tests
+  are `make test` there; its corpus of edits, `sexp-edit-tests:*edit-cases*`, is
+  data that `case-corpus` in `tools/headless-test.lisp` replays through
+  `run-command-at-caret` on a fake text view, and heml replays in its buffers.
+  Change the editing there, not here.
+- `src/keymap.lisp` — what is the Listener's own: `*paren-highlight-enabled*`,
+  `*arglist-hints-enabled*`, and the two hooks the library hands back:
+  `invalidate-key-commands` on `sexp-edit:*keys-changed-functions*`, and `note`
+  as `sexp-edit:*command-error-function*`. Option-Return runs
+  `newline-and-indent` on both front ends: AppKit already sends it to
+  `-insertNewlineIgnoringFieldEditor:`, and iOS has a `UIKeyCommand`. Plain
+  Return still submits.
 - `src/paredit-view.lisp` — the one place a command meets a view: character
   offsets to UTF-16 units, the read-only guard, the write-back. It also binds the
   prompt's width for the indenter: the input's first line starts after

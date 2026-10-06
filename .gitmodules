@@ -1,0 +1,3 @@
+[submodule "vendor/sexp-edit"]
+	path = vendor/sexp-edit
+	url = https://github.com/lispnik/sexp-edit.git

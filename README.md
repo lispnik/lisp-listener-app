@@ -92,7 +92,10 @@ is involved: nothing is photographed off the screen.
   when it has none. The structural commands are Emacs paredit's — `C-)` slurp,
   `C-}` barf, `M-(` wrap, `M-s` splice, `C-k` kill, `C-M-f`/`C-M-b` move — and
   `(setf (lisp-listener:paredit-key "C-(") 'slurp-backward)` rebinds, in
-  `init.lisp` if it should last.
+  `init.lisp` if it should last. Backspace after a closing paren goes inside
+  the list rather than deleting it, and an empty pair goes whole.
+  All of this is [sexp-edit](https://github.com/lispnik/sexp-edit), which heml
+  uses too, so the keys do the same in the editor.
 - **Return evaluates; Option-Return starts a new line**, indented the way Lisp
   is indented: a body two in, a call under its first argument. Whether an
   operator takes a body is asked of the running image, so your own macros
@@ -357,8 +360,12 @@ the editor closes or opens another.
 
 ```sh
 ocicl setup        # once per machine
-make deps          # or: ocicl install
+make deps          # git submodule update --init, then ocicl install
 ```
+
+[sexp-edit](https://github.com/lispnik/sexp-edit), the structural editing,
+is a submodule (`vendor/sexp-edit`), not an ocicl package; clone with
+`--recurse-submodules` or let `make deps` fetch it.
 
 That is the whole of it: `ocicl install` reads `ocicl.csv` and restores
 everything into `./ocicl/`, which `ocicl setup` has already put on ASDF's
@@ -602,8 +609,9 @@ make compile-check  # does it compile?
 make test           # does the listener work?
 ```
 
-The three checks need no dependencies at all — they run against
-`tools/stubs/`, so `make check` works in a fresh clone before `make deps`.
+The three checks need no dependencies but the sexp-edit submodule — they run
+against `tools/stubs/`, so `make check` works in a fresh clone once
+`git submodule update --init` has run.
 
 All three run anywhere, Linux included, and that is the point: this system
 cannot be *loaded* off macOS, because lispnik/objc opens libobjc as soon as it

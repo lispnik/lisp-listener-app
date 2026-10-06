@@ -43,6 +43,7 @@
 
 (handler-bind ((warning #'muffle-warning))
   (load (merge-pathnames "tools/stubs/stubs.lisp" *root*) :external-format :utf-8)
+  (load (merge-pathnames "tools/sexp-edit.lisp" *root*) :external-format :utf-8)
   ;; LOAD rather than COMPILE-FILE: the compiler's report is compile-check's
   ;; business and duplicating it here would only be noise.  The order is
   ;; lisp-listener.asd's, which is :SERIAL.
@@ -51,7 +52,7 @@
   ;; iOS's on ECL.  Nothing here reaches either -- they are stubs all the way
   ;; down -- but loading the one that ships on this Lisp keeps it honest.
   (dolist (name (append '("package" "impl" "main-thread" "queue" "listener"
-                          "history" "sexp" "paredit" "keymap" "indent" "transcript"
+                          "history" "keymap" "transcript"
                           "completion" "paren-highlight" "arglist" "editor" "paredit-view" "history-search"
                           "streams" "config"
                           "restarts" "preferences" "files" "canvas" "places" "views"
@@ -765,8 +766,8 @@ its lambda list."
     (nl "((a b)|)" "((a b)/ |)" "a list in operator position is one in")
     (nl "'(a b|)" "'(a b/  |)" "and so is a quoted list, whatever it starts with")
     (nl "(let ((x 1))|)" "(let ((x 1))/  |)" "LET, which has no lambda list to ask")
-    (nl "(destructuring-bind (a b)|)" "(destructuring-bind (a b)/                    |)"
-        "a distinguished argument not yet written lines up with the first")
+    (nl "(destructuring-bind (a b)|)" "(destructuring-bind (a b)/    |)"
+        "a distinguished argument not yet written is four in, as in Emacs")
     (nl "(unwind-protect|)" "(unwind-protect/    |)"
         "and with none on the line, it is four in")
     (nl "(defmethod foo :around ((x t))|)" "(defmethod foo :around ((x t))/  |)"
@@ -810,8 +811,8 @@ its lambda list."
               ") with nothing to step over declines, so the paren is typed")
   (check-edit 'delete-pair-backward "(list (|)" "(list |" "Backspace takes an empty pair whole")
   (check-edit 'delete-pair-backward "(list \"|\"" "(list |" "and an empty string whole")
-  (check-edit 'delete-pair-backward "(list (a)|" "(list (a)|"
-              "Backspace over a MATCHED paren refuses")
+  (check-edit 'delete-pair-backward "(list (a)|" "(list (a|)"
+              "Backspace after a MATCHED paren moves inside the list")
   ;; The unmatched one is the whole point: the line is already unbalanced, and
   ;; deleting that paren is what fixes it.  Declining hands the key back to the
   ;; toolkit, which deletes the character in the ordinary way.
@@ -823,8 +824,8 @@ its lambda list."
               "and over an ordinary character it declines")
   ;; Forward delete, by the same rules.
   (check-edit 'delete-pair-forward "(list |()" "(list |" "Delete takes an empty pair whole")
-  (check-edit 'delete-pair-forward "(list |(a))" "(list |(a))"
-              "Delete over a matched paren refuses")
+  (check-edit 'delete-pair-forward "(list |(a))" "(list (|a))"
+              "Delete before a matched paren moves inside the list")
   ;; "(list (a" -- the inner open paren has no partner, so it may go.
   (check-edit 'delete-pair-forward "(list |(a" :declined
               "Delete over an unmatched paren is allowed")
@@ -843,6 +844,75 @@ its lambda list."
   ;; And the ones that are reachable but unbound by default.
   (check-edit 'raise-sexp "(list (a|))" "|(a)" "raise-sexp replaces the enclosing form")
   (check-edit 'transpose-sexps "(list |a b)" "(list b |a)" "transpose swaps two siblings"))
+
+;;; A text view that is a Lisp string: just enough of NSTextView and its storage
+;;; for the glue in src/paredit-view.lisp to run on it as it runs on the real
+;;; one.  Its text is the prompt and what was typed after it.
+(defstruct fake-text (string "") (caret 0))
+
+(defun fake-invoke (receiver method &rest arguments)
+  (let ((string (fake-text-string receiver)))
+    (cond ((member method '("textStorage" "string") :test #'string=) receiver)
+          ((string= method "length") (length string))
+          ((string= method "substringWithRange:")
+           (destructuring-bind ((start . length)) arguments
+             (subseq string start (+ start length))))
+          ((string= method "replaceCharactersInRange:withString:")
+           (destructuring-bind ((start . length) new) arguments
+             (setf (fake-text-string receiver)
+                   (concatenate 'string (subseq string 0 start) new
+                                (subseq string (+ start length))))
+             nil))
+          ((string= method "selectedRange") (cons (fake-text-caret receiver) 0))
+          ((string= method "setSelectedRange:")
+           (setf (fake-text-caret receiver) (car (first arguments))) nil)
+          (t nil))))
+
+(defun case-corpus ()
+  "sexp-edit's corpus, each case through RUN-COMMAND-AT-CARET on a text view.
+Heml replays the same cases in its buffers: one table, the same answers."
+  (format t "~&~%The shared corpus, through the listener's own glue.~%")
+  (finish-output)
+  (let* ((prompt "CL-USER> ")
+         (view (make-instance 'listener-text-view))
+         (invoke (fdefinition 'objc:invoke))
+         (to-string (fdefinition 'objc:ns-string-to-string))
+         (constant (fdefinition '%ns-string-constant)))
+    (setf (view-input-start view) (length prompt))
+    ;; The input's attributes are AppKit's or UIKit's, which there are none of
+    ;; here; the fake storage takes anything as attributes.
+    (unless (gethash :input *transcript-attributes*)
+      (setf (gethash :input *transcript-attributes*) :fake-attributes))
+    (setf (fdefinition 'objc:invoke)
+          (lambda (receiver method &rest arguments)
+            (if (fake-text-p receiver)
+                (apply #'fake-invoke receiver method arguments)
+                (apply invoke receiver method arguments)))
+          (fdefinition 'objc:ns-string-to-string)
+          (lambda (string &optional preserve)
+            (if (stringp string) string (funcall to-string string preserve)))
+          ;; Attribute names: the fake storage ignores what it is given.
+          (fdefinition '%ns-string-constant) #'identity)
+    (unwind-protect
+         (dolist (case sexp-edit-tests:*edit-cases*)
+           (destructuring-bind (command before after label) case
+             (let* ((pointer (make-fake-text
+                              :string (concatenate 'string prompt
+                                                   (sexp-edit-tests:case-text before))
+                              :caret (+ (length prompt)
+                                        (sexp-edit-tests:case-offset before))))
+                    (done (run-command-at-caret view pointer command))
+                    (got (if done
+                             (sexp-edit-tests:render
+                              (subseq (fake-text-string pointer) (length prompt))
+                              (- (fake-text-caret pointer) (length prompt)))
+                             :declined)))
+               (check (equal got after) "~a: ~s => ~s" label before got))))
+      (when (eq (gethash :input *transcript-attributes*) :fake-attributes)
+        (remhash :input *transcript-attributes*))
+      (setf (fdefinition 'objc:invoke) invoke
+            (fdefinition 'objc:ns-string-to-string) to-string
+            (fdefinition '%ns-string-constant) constant))))
 
 (defun case-keymap ()
   "The keymap: parsing a spec, and rebinding one."
@@ -2000,7 +2070,7 @@ bound away from the front end's own -- a test has no business writing into
                 case-toplevel-restart-index
                 case-interactive-restarts-are-marked case-restart-rows
                 case-two-listeners case-nil-is-nobody case-history case-completion
-                case-sexp case-paredit case-indent case-keymap case-init-file
+                case-sexp case-paredit case-indent case-corpus case-keymap case-init-file
                 case-history-search
                 case-prompt-is-recorded
                 case-canvas case-turtle case-examples case-preferences
