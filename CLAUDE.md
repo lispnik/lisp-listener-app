@@ -213,7 +213,8 @@ NSTextView and UITextView share.
   prompt's width for the indenter: the input's first line starts after
   `CL-USER> `, so its columns are not its offsets.
 - `src/paren-highlight.lisp` — the tint under the caret's paren and its partner,
-  red when it has none. Input region only.
+  red when it has none. Input region only. Which paren and which partner is
+  sexp-edit's `paren-pair-at`, which heml's Lisp mode asks too.
 - `src/arglist.lisp` — the hint: the lambda list of the innermost call around
   the caret (`call-at`, which walks outward past a list that is no call, and
   sees no call inside a string or comment), and which argument the caret is on

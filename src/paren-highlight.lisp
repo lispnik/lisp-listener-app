@@ -66,22 +66,8 @@ background colour, so there is nothing to preserve."
     (push range (view-paren-marks view)))
   view)
 
-(defun caret-paren (text offset)
-  "The offset of the paren the caret is resting on, or NIL.
-
-After a `)' first -- which is where the caret is when you have just typed one --
-and otherwise before a `('.  Parens inside strings and comments are not parens
-for this purpose, which is what CODE-POSITION-P answers."
-  (cond ((and (plusp offset)
-              (<= offset (length text))
-              (char= (char text (1- offset)) #\))
-              (code-position-p text (1- offset)))
-         (1- offset))
-        ((and (< offset (length text))
-              (char= (char text offset) #\()
-              (code-position-p text offset))
-         offset)
-        (t nil)))
+;;; Which paren the caret is on, and its partner, is sexp-edit's
+;;; PAREN-PAIR-AT, which heml's Lisp mode asks too.
 
 (defun refresh-paren-highlight (view pointer)
   "Put the tint where the caret is now.  Thread 1; safe to call on every
@@ -93,11 +79,10 @@ keystroke and every selection change, and safe when there is no view at all."
           (let* ((start (view-input-start view))
                  (caret (caret-index pointer)))
             (when (and start caret (>= caret start))
-              (let* ((text (pending-input view pointer))
-                     (offset (utf-16-offset->index text (- caret start)))
-                     (paren (caret-paren text offset)))
-                (when paren
-                  (let ((partner (paren-match-offset text paren)))
+              (let ((text (pending-input view pointer)))
+                (multiple-value-bind (paren partner)
+                    (paren-pair-at text (utf-16-offset->index text (- caret start)))
+                  (when paren
                     (flet ((mark (index kind)
                              (mark-paren view pointer
                                          (+ start (utf-16-length (subseq text 0 index)))
