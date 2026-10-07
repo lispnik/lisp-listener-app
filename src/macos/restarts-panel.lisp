@@ -26,7 +26,6 @@
 
 (in-package #:lisp-listener)
 
-(defconstant +ns-view-width-sizable+ 2)
 (defconstant +ns-view-min-x-margin+ 1)
 (defconstant +ns-line-break-by-word-wrapping+ 0)
 (defconstant +ns-line-break-by-truncating-tail+ 4)

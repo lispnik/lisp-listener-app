@@ -226,9 +226,10 @@ NSTextView and UITextView share.
   built without, so `recorded-cl-arglists` (`impl.lisp`) asks the compiling
   ECL and compiles the answers in. `refresh-arglist-hint` runs on every
   selection change and calls the front end's `show-arglist-hint` only when
-  something changed: the window's subtitle on the Mac (plain text, so the
-  argument is bracketed ‹ ›), a line over the key bar on iOS (attributed,
-  bold). `*arglist-hints-enabled*` is the `:arglist-hints` preference.
+  something changed: a status line under the transcript on the Mac (the
+  split view's top pane is the transcript over that line, made by
+  `make-transcript-pane`), a line over the key bar on iOS; both attributed,
+  the argument bold. `*arglist-hints-enabled*` is the `:arglist-hints` preference.
 - `src/config.lisp` — `init.lisp`, read from `history-directory` at startup, so a
   rebinding survives a launch. A broken one is reported, never fatal.
   `init-file-path` is where it is; the exported `(init-file)` makes it from

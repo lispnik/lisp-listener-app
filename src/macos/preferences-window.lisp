@@ -18,7 +18,7 @@
 (defparameter *preference-switches*
   '((:paredit "Balance parentheses and quotes as they are typed")
     (:paren-highlight "Tint the parenthesis at the caret and its partner")
-    (:arglist-hints "Show what the call being typed takes, under the title")
+    (:arglist-hints "Show what the call being typed takes, under the transcript")
     (:auto-indent "Indent the new line that Option-Return starts")
     (:debugger-pane "Dock the debugger under the transcript")
     (:reopen-windows "Reopen windows where they were"))

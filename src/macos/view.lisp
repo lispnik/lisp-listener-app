@@ -10,6 +10,8 @@
 ;;; AppKit constants ----------------------------------------------------------
 
 (defconstant +ns-view-width-and-height-sizable+ 18)
+(defconstant +ns-view-width-sizable+ 2)
+(defconstant +ns-view-max-y-margin+ 32)
 (defconstant +ns-window-style-titled+ 1)
 (defconstant +ns-window-style-closable+ 2)
 (defconstant +ns-window-style-mask+ 15
@@ -80,7 +82,10 @@ begins.  UTF-16 units, thread 1 only.")
 while a fresh line is being typed.")
    (paren-marks :initform '() :accessor view-paren-marks
                 :documentation "The ranges the paren highlight last tinted, so
-that they can be untinted.  Thread 1 only; see src/paren-highlight.lisp."))
+that they can be untinted.  Thread 1 only; see src/paren-highlight.lisp.")
+   (hint-label :initform nil :accessor view-hint-label
+               :documentation "The status line under the transcript, where
+SHOW-ARGLIST-HINT says what the call being typed takes."))
   (:objc-class-name "LispListenerView")
   (:objc-superclass-name "NSTextView"))
 
@@ -308,20 +313,40 @@ Meta -- which is what a Mac keyboard offers for M-."
     (dolist (candidate (listener-completions token) array)
       (objc:invoke array "addObject:" candidate))))
 
-;;; What the call being typed takes, in the window's subtitle: under the title,
-;;; out of the way of the transcript, and gone when there is nothing to say.
-;;; A subtitle is plain text, so the argument at the caret is bracketed.
+;;; What the call being typed takes, on the status line under the transcript:
+;;; always there, so the transcript does not jump as hints come and go, and
+;;; empty when there is nothing to say.  The argument at the caret is in bold
+;;; and in the text colour, as on iOS.
+
+(defparameter *hint-line-height* 20d0
+  "The height of the status line under the transcript, in points.")
+
+(defun hint-font (&optional bold)
+  (objc:invoke "NSFont" "monospacedSystemFontOfSize:weight:"
+               11d0 (if bold 0.4d0 0d0)))
 
 (defun show-arglist-hint (listener hint start end &optional view)
-  (let ((window (if view
-                    (objc:invoke (objc:objc-object-pointer view) "window")
-                    (listener-window listener))))
-    (when (live-pointer-p window)
-      (objc:invoke window "setSubtitle:"
-                   (cond ((null hint) "")
-                         ((and start end)
-                          (concatenate 'string (subseq hint 0 start)
-                                       "‹" (subseq hint start end) "›"
-                                       (subseq hint end)))
-                         (t hint))))
+  (let* ((object (or view (listener-view-object listener)))
+         (label (and object (view-hint-label object))))
+    (when (live-pointer-p label)
+      (if (null hint)
+          (objc:invoke label "setStringValue:" "")
+          (let ((text (objc:invoke (objc:invoke "NSMutableAttributedString" "alloc")
+                                   "initWithString:" hint))
+                (whole (cons 0 (utf-16-length hint))))
+            (objc:invoke text "addAttribute:value:range:"
+                         (%ns-string-constant "NSFontAttributeName") (hint-font) whole)
+            (objc:invoke text "addAttribute:value:range:"
+                         (%ns-string-constant "NSForegroundColorAttributeName")
+                         (objc:invoke "NSColor" "secondaryLabelColor") whole)
+            (when (and start end)
+              (let ((range (cons (utf-16-length (subseq hint 0 start))
+                                 (utf-16-length (subseq hint start end)))))
+                (objc:invoke text "addAttribute:value:range:"
+                             (%ns-string-constant "NSFontAttributeName") (hint-font t) range)
+                (objc:invoke text "addAttribute:value:range:"
+                             (%ns-string-constant "NSForegroundColorAttributeName")
+                             (objc:invoke "NSColor" "labelColor") range)))
+            (objc:invoke label "setAttributedStringValue:" text)
+            (objc:release text))))
     t))

@@ -265,6 +265,41 @@ last quit, and open the others it had, where they were.  Thread 1; MAIN only."
           (show-listener-window listener))
         (length frames)))))
 
+(defun make-transcript-pane (scroll object frame)
+  "A view, +1, holding SCROLL -- the transcript -- over a status line one
+*HINT-LINE-HEIGHT* high, which becomes OBJECT's hint label.  The line keeps its
+height and the transcript takes whatever the window gives."
+  (let* ((width (aref frame 2))
+         (height (aref frame 3))
+         (line *hint-line-height*)
+         (pane (objc:invoke (objc:invoke "NSView" "alloc") "initWithFrame:"
+                            (vector 0d0 0d0 width height)))
+         (rule (objc:invoke (objc:invoke "NSBox" "alloc") "initWithFrame:"
+                            (vector 0d0 (- line 1d0) width 1d0)))
+         (label (objc:invoke (objc:invoke "NSTextField" "alloc") "initWithFrame:"
+                             (vector 8d0 3d0 (- width 16d0) (- line 6d0)))))
+    (objc:invoke pane "setAutoresizingMask:" +ns-view-width-and-height-sizable+)
+    (objc:invoke scroll "setFrame:" (vector 0d0 line width (- height line)))
+    (objc:invoke pane "addSubview:" scroll)
+    (objc:invoke rule "setBoxType:" 2)             ; NSBoxSeparator
+    (objc:invoke rule "setAutoresizingMask:"
+                 (logior +ns-view-width-sizable+ +ns-view-max-y-margin+))
+    (objc:invoke pane "addSubview:" rule)
+    (objc:release rule)
+    (objc:invoke label "setStringValue:" "")
+    (objc:invoke label "setBezeled:" nil)
+    (objc:invoke label "setDrawsBackground:" nil)
+    (objc:invoke label "setEditable:" nil)
+    (objc:invoke label "setSelectable:" nil)
+    (objc:invoke label "setFont:" (hint-font))
+    (objc:invoke (objc:invoke label "cell") "setLineBreakMode:" 4) ; truncating tail
+    (objc:invoke label "setAutoresizingMask:"
+                 (logior +ns-view-width-sizable+ +ns-view-max-y-margin+))
+    (objc:invoke pane "addSubview:" label)
+    (objc:release label)
+    (setf (view-hint-label object) label)
+    pane))
+
 (defun make-listener-window (listener &key (title "Lisp Listener")
                                            (frame +default-frame+))
   "Build the window around a fresh listener view and fill in LISTENER.
@@ -289,12 +324,16 @@ Main thread only.  Returns LISTENER."
       (objc:invoke scroll "setDocumentView:" view)
       ;; A split view, with the transcript as its only pane until a debugger
       ;; level opens: the restarts are docked under it, not in a window of
-      ;; their own (see src/macos/restarts-panel.lisp).
-      (let ((split (objc:invoke (objc:invoke "NSSplitView" "alloc") "initWithFrame:" frame)))
+      ;; their own (see src/macos/restarts-panel.lisp).  The pane is the
+      ;; transcript over its status line, so the line stays with the
+      ;; transcript and the restarts go under both.
+      (let ((split (objc:invoke (objc:invoke "NSSplitView" "alloc") "initWithFrame:" frame))
+            (pane (make-transcript-pane scroll object frame)))
         (objc:invoke split "setVertical:" nil)
         (objc:invoke split "setDividerStyle:" 2)   ; NSSplitViewDividerStyleThin
         (objc:invoke split "setAutoresizingMask:" +ns-view-width-and-height-sizable+)
-        (objc:invoke split "addSubview:" scroll)
+        (objc:invoke split "addSubview:" pane)
+        (objc:release pane)
         (objc:invoke window "setContentView:" split)
         (objc:release split))
       (objc:invoke window "setInitialFirstResponder:" view)

@@ -1168,8 +1168,8 @@ a pointer vouched for, an array walked into, a window's picture and controls."
     (check-step (null *inspectors*) "and these close as the others did")))
 
 (defun debugger-test-arglist (listener directory)
-  "The hint in the window's subtitle: what the call being typed takes, and the
-argument at the caret."
+  "The hint on the status line under the transcript: what the call being
+typed takes, and the argument at the caret, which is in bold."
   (let* ((view (listener-view-object listener))
          (pointer (listener-view listener))
          (window (listener-window listener)))
@@ -1179,23 +1179,32 @@ argument at the caret."
              ;; AppKit tells the delegate of.
              (objc:invoke pointer "setSelectedRange:" (cons (transcript-length pointer) 0))
              (pump 0.1d0))
-           (subtitle ()
-             (objc:ns-string-to-string (objc:invoke window "subtitle"))))
+           (hint ()
+             (objc:ns-string-to-string (objc:invoke (view-hint-label view) "stringValue")))
+           (argument ()
+             ;; What SHOW-ARGLIST-HINT was last told to set in bold.
+             (destructuring-bind (&optional hint start end) (gethash view *arglist-shown*)
+               (and hint start end (subseq hint start end)))))
+      (check-step (equal "" (objc:ns-string-to-string (objc:invoke window "subtitle")))
+                  "the window's subtitle is not used")
       (type-input "(mapcar #'1+ ")
-      (check-step (search "(mapcar function ‹list› &rest more-lists)" (subtitle))
-                  "typing (mapcar #'1+ puts what MAPCAR takes under the title: ~s" (subtitle))
+      (check-step (and (search "(mapcar function list &rest more-lists)" (hint))
+                       (equal "list" (argument)))
+                  "typing (mapcar #'1+ puts what MAPCAR takes under the transcript: ~s, ~s"
+                  (hint) (argument))
       (write-window-png window (namestring (merge-pathnames
                                             "arglist.png"
                                             (uiop:ensure-directory-pathname directory))))
       (type-input "(let ((x 1)) (format t ")
-      (check-step (search "(format destination ‹control-string› &rest" (subtitle))
-                  "inside a LET, the innermost call: ~s" (subtitle))
+      (check-step (and (search "(format destination control-string &rest" (hint))
+                       (equal "control-string" (argument)))
+                  "inside a LET, the innermost call: ~s, ~s" (hint) (argument))
       (setf (preference :arglist-hints) nil)
       (preferences-changed)
-      (check-step (equal "" (subtitle)) "switched off in Settings, it goes")
+      (check-step (equal "" (hint)) "switched off in Settings, it goes")
       (setf (preference :arglist-hints) t)
       (type-input "")
-      (check-step (equal "" (subtitle)) "and with nothing typed there is nothing to say"))))
+      (check-step (equal "" (hint)) "and with nothing typed there is nothing to say"))))
 
 (defun run-debugger-test ()
   "Drive the pane and check it.  Exits 0 only when every check held."
