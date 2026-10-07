@@ -106,7 +106,10 @@ piece of work cannot land on the next.")
   (fallback nil)
   ;; A function of a point on the drawing, x and y in the canvas's units,
   ;; answering what to say about it -- the value under the pointer -- or NIL.
-  (readout nil))
+  (readout nil)
+  ;; A function of a point too, answering the object there to walk into, and
+  ;; a label for the step, as two values; or NIL.  A click, or a tap.
+  (open nil))
 
 (defstruct (native-scene (:include scene))
   ;; A function of no arguments, called on thread 1, answering a view of the
@@ -152,7 +155,7 @@ an NSImageView for an image, say.  FALLBACK is the scene to show where a native
 view cannot be -- printed as text, or on the other platform."
   (make-native-scene :thunk thunk :fallback fallback))
 
-(defun call-with-drawing (function fallback &optional readout)
+(defun call-with-drawing (function fallback &optional readout open)
   ;; The canvas's own machinery, pointed at a list: while *CANVAS-FRAME* is
   ;; bound, LINE and BOX and the rest collect there instead of going to the
   ;; canvas.  The pen and the turtle are bound too, so that a view neither
@@ -166,17 +169,22 @@ view cannot be -- printed as text, or on the other platform."
     (make-drawing-scene :ops (reverse (car *canvas-frame*))
                         :background *canvas-background*
                         :fallback fallback
-                        :readout readout)))
+                        :readout readout
+                        :open open)))
 
-(defmacro inspector:drawing ((&key fallback readout) &body body)
+(defmacro inspector:drawing ((&key fallback readout open) &body body)
   "A drawing: whatever BODY draws with the canvas's functions -- LINE, BOX, DOT,
 HUE, the turtle -- on a canvas of its own, -100 to 100 each way.  Nothing goes
 to the real canvas.  FALLBACK is text to show where a drawing cannot be.
 
 READOUT, if given, is a function of x and y -- a point on the drawing, in the
 same units -- answering a string to show while the pointer is there: the value
-of the cell under it, the bin it is in.  NIL for a point with nothing to say."
-  `(call-with-drawing (lambda () ,@body) ,fallback ,readout))
+of the cell under it, the bin it is in.  NIL for a point with nothing to say.
+
+OPEN, if given, is a function of x and y too, answering the object at that
+point and, as a second value, a label for it: a click there, or a tap, walks
+the inspector into it.  NIL where there is nothing to open."
+  `(call-with-drawing (lambda () ,@body) ,fallback ,readout ,open))
 
 (defun drawing-readout (scene x y)
   "What SCENE's drawing says about the point (X, Y), or NIL.  Never signals."
@@ -184,6 +192,15 @@ of the cell under it, the bin it is in.  NIL for a point with nothing to say."
     (and readout
          (handler-case (let ((text (funcall readout x y)))
                          (and text (princ-to-string text)))
+           (error () nil)))))
+
+(defun drawing-open (scene x y)
+  "The object SCENE's drawing has at the point (X, Y) to walk into, and a
+label for it, as two values; NIL when there is none.  Never signals."
+  (let ((open (and (drawing-scene-p scene) (drawing-scene-open scene))))
+    (and open
+         (handler-case (multiple-value-bind (object label) (funcall open x y)
+                         (and object (values object label)))
            (error () nil)))))
 
 ;;; Options --------------------------------------------------------------------------

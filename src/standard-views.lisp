@@ -197,15 +197,118 @@
                                        ((find-class symbol nil) "class")
                                        (t "")))))))))
 
-(inspector:define-view (class-view :title "Class" :type class)
+(defun class-rows (classes)
+  "A row for each of CLASSES, to walk into: its name, and it."
+  (loop for class in classes
+        collect (list (class-label class) (inspector:value class (class-label class)))))
+
+(defun nothing-rows (rows)
+  (or rows (list (list "none" ""))))
+
+(inspector:define-view (class-view :title "Class" :type class :priority 2)
     (class)
-  "A class: what it inherits from, what inherits from it, and its slots."
+  "A class: what it is, and what it inherits from and is inherited by, each a
+row to walk into."
+  (let ((subclasses (coerce (sort (copy-list (class-direct-subclasses* class))
+                                  #'string< :key #'class-label)
+                            'vector)))
+    (inspector:stack
+     (inspector:section
+      "About"
+      (inspector:table
+       :columns '("" "Value")
+       :rows (remove nil
+                     (list (list "name" (inspector:value (class-name class)))
+                           (list "metaclass" (inspector:value (class-of class)))
+                           (let ((documentation (ignore-errors (documentation class 't))))
+                             (and documentation (list "documentation" documentation)))
+                           (list "slots" (format nil "~d" (length (class-effective-slots* class))))
+                           (list "methods"
+                                 (format nil "~d" (length (specializer-direct-methods* class))))))))
+     (inspector:section
+      "Superclasses"
+      (inspector:table :columns '("Class" "")
+                       :rows (nothing-rows (class-rows (class-direct-superclasses* class)))))
+     (inspector:section
+      (format nil "Subclasses (~d)" (length subclasses))
+      (if (zerop (length subclasses))
+          (inspector:table :rows (nothing-rows '()))
+          (inspector:table :columns '("Class" "")
+                           :count (length subclasses)
+                           :row (lambda (index)
+                                  (first (class-rows (list (aref subclasses index)))))))))))
+
+(defun slot-declarers (class name)
+  "The classes in CLASS's precedence list that declare a slot NAME themselves,
+most specific first, each with its direct slot definition: (CLASS . SLOT)."
+  (loop for each in (class-precedence-list* class)
+        for direct = (find name (class-direct-slots* each) :key #'slot-definition-name*)
+        when direct collect (cons each direct)))
+
+(defun slot-row (class slot)
+  "The Slots view's row for SLOT, one of CLASS's effective slots."
+  (let* ((name (slot-definition-name* slot))
+         (declarers (slot-declarers class name))
+         (from (or (car (first declarers)) class))
+         (accessors (remove-duplicates
+                     (loop for (nil . direct) in declarers
+                           append (slot-definition-readers* direct)
+                           append (slot-definition-writers* direct))
+                     :test #'equal)))
+    (flet ((printed (thing)
+             (let ((*print-pretty* nil))
+               (string-downcase (inspector-print thing 60)))))
+      (list (string-downcase (symbol-name name))
+            (class-label from)
+            (printed (slot-definition-type* slot))
+            (printed (slot-definition-allocation* slot))
+            (format nil "~{~(~s~)~^ ~}" (slot-definition-initargs* slot))
+            (if (slot-definition-initfunction* slot)
+                (let ((*print-pretty* nil))
+                  (inspector-print (slot-definition-initform* slot) 60))
+                "")
+            (format nil "~{~(~s~)~^ ~}" accessors)
+            (inspector:value from (class-label from))))))
+
+(inspector:define-view (slots-view :title "Slots" :type class)
+    (class)
+  "Every slot an instance of the class has, its own and inherited: where each
+is declared -- the row to walk into -- its type, allocation, initargs,
+initform, and the functions that read and write it."
   (inspector:table
-   :columns '("" "Value")
-   :rows (list (list "name" (inspector:value (class-name class)))
-               (list "precedence" (inspector:value (class-precedence-names class)))
-               (list "subclasses" (inspector:value (class-direct-subclass-names class)))
-               (list "slots" (inspector:value (class-slot-names class))))))
+   :columns '("Slot" "From" "Type" "Allocation" "Initargs" "Initform" "Accessors" "")
+   :rows (nothing-rows
+          (loop for slot in (class-effective-slots* class)
+                collect (slot-row class slot)))))
+
+(defun specializer-label (specializer)
+  (if (typep specializer 'class)
+      (class-label specializer)
+      (let ((*print-pretty* nil))
+        (string-downcase (inspector-print specializer 40)))))
+
+(inspector:define-view (methods-view :title "Methods" :type class
+                                     :when (lambda (class)
+                                             (specializer-direct-methods* class)))
+    (class)
+  "The methods specialized on the class, by generic function: each row walks
+into its generic function."
+  (let ((rows (coerce
+               (sort (loop for method in (specializer-direct-methods* class)
+                           for function = (method-generic-function* method)
+                           collect (list (let ((*print-pretty* nil))
+                                           (string-downcase
+                                            (inspector-print (generic-function-name* function) 60)))
+                                         (format nil "~{~(~s~)~^ ~}" (method-qualifiers method))
+                                         (format nil "~{~a~^, ~}"
+                                                 (mapcar #'specializer-label
+                                                         (method-specializers* method)))
+                                         (inspector:value function)))
+                     #'string< :key #'first)
+               'vector)))
+    (inspector:table :columns '("Generic function" "Qualifiers" "Specializers" "")
+                     :count (length rows)
+                     :row (lambda (index) (aref rows index)))))
 
 (inspector:define-view (function-view :title "Function" :type function)
     (function)

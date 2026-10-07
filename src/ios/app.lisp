@@ -1186,6 +1186,58 @@ A step whose predicate has not held within its time fails."
              (inspector-drawing-touch inspector :up 0 0)
              (when (drawing-view-readout (inspector-part inspector :drawing-object))
                (error "the readout is still there")))))
+   ;; A class: its Graph, and a tap on a class in it walking into it.
+   (list "a class is inspected" (lambda () (at-top-level-prompt-p listener))
+         (lambda ()
+           (setf *canvas-paint-failures* 0)
+           (type-line listener
+                      "(progn (defclass gem () ()) (defclass cut-gem (gem) ()) (defclass set-gem (gem) ()) (defclass ring-stone (cut-gem set-gem) ()) (inspect (find-class 'ring-stone)))")))
+   (list "on its Class view, with its Graph a choice away"
+         (lambda () (let ((inspector *inspector-shown*))
+                      (and inspector (inspector-model inspector)
+                           (eq (inspector-object inspector) (find-class 'cl-user::ring-stone))
+                           (equal "Class" (pane-model-view-title (sheet-pane-model inspector))))))
+         (lambda ()
+           (let* ((inspector *inspector-shown*)
+                  (views (inspector-part inspector :views))
+                  (index (position "Graph" (pane-model-choices (sheet-pane-model inspector))
+                                   :key #'cdr :test #'string=)))
+             (unless index (error "there is no Graph among the views"))
+             (objc:invoke views "setSelectedSegmentIndex:" index)
+             (objc:invoke views "sendActionsForControlEvents:"
+                          +ui-control-event-value-changed+))))
+   (list "which draws the class among its relations"
+         (lambda () (let ((pane (sheet-pane-model *inspector-shown*))
+                          (bounds (objc:invoke (inspector-part *inspector-shown* :drawing)
+                                               "bounds")))
+                      ;; Laid out, too: a tap on a drawing still without its
+                      ;; height lands nowhere, for a finger as for this.
+                      (and pane (equal "Graph" (pane-model-view-title pane))
+                           (pane-model-drawing pane)
+                           (>= (min (aref bounds 2) (aref bounds 3)) 40))))
+         nil)
+   (list :hold nil nil)
+   (list "a tap on a superclass in it" (constantly t)
+         (lambda ()
+           (let* ((inspector *inspector-shown*)
+                  (bounds (objc:invoke (inspector-part inspector :drawing) "bounds"))
+                  (width (aref bounds 2))
+                  (height (aref bounds 3))
+                  (scale (/ (max 1d0 (min width height)) 200d0))
+                  (node (find "cut-gem" (layout-class-graph (find-class 'cl-user::ring-stone))
+                              :key #'node-label :test #'string=)))
+             (unless node (error "the graph has no cut-gem"))
+             (when (< (min width height) 40)
+               (error "the drawing is ~,1f by ~,1f points" width height))
+             (let ((x (+ (/ width 2) (* scale (node-x node))))
+                   (y (- (/ height 2) (* scale (node-y node)))))
+               (inspector-drawing-touch inspector :down x y)
+               (inspector-drawing-touch inspector :up x y)))))
+   (list "walks into it, with nothing the painter could not paint"
+         (lambda () (eq (inspector-object *inspector-shown*) (find-class 'cl-user::cut-gem)))
+         (lambda ()
+           (unless (zerop *canvas-paint-failures*)
+             (error "~d shapes could not be painted" *canvas-paint-failures*))))
    ;; An Objective-C object, shown by a view of UIKit's own; and a second
    ;; (inspect x) takes the sheet over from the first.
    (list "an Objective-C object is inspected" (lambda () (at-top-level-prompt-p listener))

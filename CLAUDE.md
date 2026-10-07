@@ -139,7 +139,8 @@ order is load-bearing**:
 - `lisp-listener/core` — `src/`: `package impl main-thread queue listener history
   keymap transcript completion paren-highlight arglist paredit-view
   history-search streams config restarts preferences files canvas places views
-  inspector standard-views objc-views examples repl`. No toolkit; SBCL and ECL.
+  inspector class-graph standard-views objc-views examples repl`. No toolkit;
+  SBCL and ECL.
 - `lisp-listener` — the core plus `src/macos/`: `view window restarts-panel
   history-panel canvas-window preferences-window inspector-window screenshot
   objc-views debugger-test demo app`. The name it always had.
@@ -305,7 +306,7 @@ NSTextView and UITextView share.
   and in SVG. The painter reports a shape it cannot paint and goes on, so it
   counts them too (`*canvas-paint-failures*`): the iOS self-test draws the
   turtle, an L-system and two turtles, and requires none.
-- **The inspector**, five files, all toolkit-free. The names a contributor
+- **The inspector**, six files, all toolkit-free. The names a contributor
   types are a third package, `INSPECTOR`, defined from inside `LISP-LISTENER`
   as `CANVAS` is, and **not** imported into `CL-USER` (`text` is the canvas's).
   - `src/places.lisp` — a `place` is where a value is: it answers its value,
@@ -331,7 +332,11 @@ NSTextView and UITextView share.
     `*canvas-frame*` bound, so they collect into a list. Options are declared
     data, the view's own; `define-controls` contributes controls bound to
     places, which belong to the object. A drawing may carry a `:readout`, a
-    function of a point answering what to say about it. `:objc-class "NSImage"`
+    function of a point answering what to say about it, and an `:open`, a
+    function of a point answering the object there and a label: a click on
+    the Mac (`-mouseDown:` and `-mouseUp:` within `*drawing-click-slop*`) or
+    a tap on iOS (`:down` then `:up` within `*drawing-tap-slop*`) asks it,
+    on the worker, through `inspector-open-at-point`. `:objc-class "NSImage"`
     matches by `-isKindOfClass:` instead of a type; `:requires (:appkit)`
     keeps a view from applying where the front end lacks that capability;
     `inspector:native` is a scene that is a function answering a toolkit view,
@@ -361,6 +366,22 @@ NSTextView and UITextView share.
   - `src/standard-views.lisp` — the views that ship, written with
     `define-view` and nothing else. Disassembly applies only where
     `function-disassembly` (`impl.lisp`) answers: ECL's would run a C compiler.
+    A class has Class (priority 2: what it is, and its direct superclasses and
+    subclasses as rows to walk into), Slots (every effective slot, where it is
+    declared, its type, allocation, initargs, initform and accessors), Methods
+    (what is specialized on it) and Hierarchy. The metaobject protocol is
+    reached only through the `*` shims in `impl.lisp`
+    (`class-direct-superclasses*` and the rest), `sb-mop:` or `clos:`.
+  - `src/class-graph.lisp` — the class's **Graph** view (priority 1, so it
+    opens beside Class): everything the class inherits from above it, at the
+    layer of its longest path, and its subclasses below to a Depth option,
+    laid out here (`layout-class-graph`: layers, three barycentre sweeps,
+    scaled into -95..95) and drawn with the canvas's own shapes, so both
+    painters draw it and `make test` reads it. No toolkit has a graph to lend
+    -- Swift Charts plots data, and is out of the Objective-C runtime's reach
+    -- and a drawing cannot scroll, so a layer past its width limit ends in one
+    "+N more" node, which opens as the list of the rest. Loaded before
+    `standard-views`, which uses its `class-label`.
   - `src/objc-views.lisp` — Foundation's objects: any object, `NSArray`,
     `NSDictionary`, `NSString`. What comes out of a collection is wrapped on
     the way, so it can be walked into. The toolkit's own are
@@ -431,7 +452,8 @@ NSTextView and UITextView share.
   Controls are told new values rather than rebuilt while their set is
   unchanged -- a slider rebuilt mid-drag is a slider let go of. The drawing
   has a tracking area: `-mouseMoved:` asks the worker for a readout and
-  `show-inspector-readout` paints it, unless the pointer has left meanwhile.
+  `show-inspector-readout` paints it, unless the pointer has left meanwhile;
+  a click asks the drawing's `:open` and walks there.
   A native scene's view is made by its function on each refresh and put in the
   pane's `:native-host`. **All Views…** is a sheet on the inspector's window
   whose table's data source is the window's controller: every view, greyed
@@ -444,7 +466,9 @@ NSTextView and UITextView share.
   Remove and Add (`inspector-add-line`: one field, so a hash table's entry is
   a key and then a value). **Views** in the header presents a second sheet
   listing every view, with why each that does not apply does not; its table
-  shares the controller and is told apart by its tag. Every control's target is the sheet's one
+  shares the controller and is told apart by its tag. The drawing's
+  zero-length long press is a readout while the finger is down, and a tap --
+  lifted where it landed -- opens what is under it. Every control's target is the sheet's one
   controller, by tag -- `uikit:on-tap` keeps its target for good, and these
   are rebuilt.
 - `src/macos/heml.lisp` — heml in this application. heml (lispnik/heml) has a
@@ -514,7 +538,7 @@ NSTextView and UITextView share.
   edit, contributed controls, each of the four ways of opening one, a readout,
   the All Views sheet, Insert and Remove in a list, and Objective-C objects:
   a pointer vouched for, an `NSArray` walked into, a window's picture and its
-  opacity slider).
+  opacity slider; and a class's Graph, hovered and clicked into).
   Exits 0 only if every check held; `macos.yml` runs it on
   both architectures. **Everything in the pane is AppKit, so the headless test
   reaches none of it**; every bug in the pane's first versions was found by

@@ -1167,6 +1167,64 @@ a pointer vouched for, an array walked into, a window's picture and controls."
     (pump-for 0.3d0)
     (check-step (null *inspectors*) "and these close as the others did")))
 
+(defun debugger-test-inspector-classes (listener directory)
+  "A class: its Class view beside its Graph, the pointer over a class in the
+graph, and a click on it walking into it."
+  (type-and-submit listener
+                   "(progn (defclass gem () ()) (defclass cut-gem (gem) ()) (defclass set-gem (gem) ()) (defclass ring-stone (cut-gem set-gem) ()))")
+  (back-at-top-p listener)
+  (type-and-submit listener "(inspect (find-class 'ring-stone))")
+  (check-step (wait-for (lambda () (newest-inspector-ready-p 1)) :timeout 15)
+              "(inspect (find-class 'ring-stone)) opens an inspector")
+  (back-at-top-p listener)
+  (let* ((inspector (first *inspectors*))
+         (window (inspector-part inspector :window))
+         (right (inspector-pane-parts inspector 1))
+         (drawing (getf right :drawing))
+         (object (getf right :drawing-object))
+         (bounds (objc:invoke drawing "bounds"))
+         (width (aref bounds 2))
+         (height (aref bounds 3))
+         (scale (/ (min width height) 200d0))
+         (target (find "cut-gem" (layout-class-graph (find-class 'cl-user::ring-stone))
+                       :key #'node-label :test #'string=)))
+    (check-step (equal (inspector-pane-titles inspector) '("Class" "Graph"))
+                "a class opens on its Class view beside its Graph: ~s"
+                (inspector-pane-titles inspector))
+    (check-step target "the graph has a node for the superclass cut-gem")
+    (when target
+      ;; The node's centre: the canvas's units to the view's points -- the
+      ;; view is flipped -- and on to the window's.
+      (let* ((point (objc:invoke drawing "convertPoint:toView:"
+                                 (vector (+ (/ width 2) (* scale (node-x target)))
+                                         (- (/ height 2) (* scale (node-y target))))
+                                 nil))
+             (x (aref point 0))
+             (y (aref point 1)))
+        (objc:invoke drawing "mouseMoved:" (window-mouse-test-event window 5 x y))
+        (check-step (wait-for (lambda () (let ((readout (drawing-view-readout object)))
+                                           (and readout (search "cut-gem" (first readout)))))
+                              :timeout 10)
+                    "the pointer over a class in the graph names it: ~a"
+                    (first (drawing-view-readout object)))
+        (pump-for 0.3d0)
+        (write-window-png window (namestring (merge-pathnames
+                                              "inspector-class-graph.png"
+                                              (uiop:ensure-directory-pathname directory))))
+        (objc:invoke drawing "mouseDown:" (window-mouse-test-event window 1 x y))
+        (objc:invoke drawing "mouseUp:" (window-mouse-test-event window 2 x y))
+        (check-step (wait-for (lambda () (eq (inspector-object inspector)
+                                             (find-class 'cl-user::cut-gem)))
+                              :timeout 10)
+                    "and a click on it walks into it")
+        (check-step (wait-for (lambda () (equal (inspector-pane-titles inspector)
+                                                '("Class" "Graph")))
+                              :timeout 10)
+                    "which is a class, shown the same way")))
+    (hide-inspectors)
+    (pump-for 0.3d0)
+    (check-step (null *inspectors*) "and it closes")))
+
 (defun debugger-test-arglist (listener directory)
   "The hint on the status line under the transcript: what the call being
 typed takes, and the argument at the caret, which is in bold."
@@ -1231,6 +1289,7 @@ typed takes, and the argument at the caret, which is in bold."
     (debugger-test-windows listener)
     (debugger-test-inspector listener directory)
     (debugger-test-inspector-more listener directory)
+    (debugger-test-inspector-classes listener directory)
     ;; heml, when the image has it: src/macos/heml-test.lisp.
     (let ((heml-test (find-symbol "DEBUGGER-TEST-HEML" "LISP-LISTENER")))
       (when (and heml-test (fboundp heml-test))

@@ -141,27 +141,67 @@ which wants to know whether there is an &BODY in it."
    #+sbcl (sb-kernel:%fun-lambda-list (macro-function symbol))
    #+ecl (ext:function-lambda-list symbol)))
 
-(defun class-slot-names (class)
-  "The names of CLASS's slots, in order; NIL when it has none or will not say.
-Standard classes and structure classes alike, on both."
+;;; The metaobject protocol, which both have under a package of its own.  A
+;;; shim answers NIL rather than signal: an inspector asks of any class at all,
+;;; and a class that will not answer is shown as having nothing to say.
+
+(defmacro define-mop-shim (name mop-name (&rest lambda-list) &optional documentation)
+  (let ((function (find-symbol (string mop-name) #+sbcl "SB-MOP" #+ecl "CLOS")))
+    (unless function
+      (error "No ~a in this Lisp's metaobject protocol." mop-name))
+    `(defun ,name ,lambda-list
+       ,@(and documentation (list documentation))
+       (ignore-errors (,function ,@lambda-list)))))
+
+(define-mop-shim class-direct-superclasses* class-direct-superclasses (class))
+(define-mop-shim class-direct-subclasses* class-direct-subclasses (class))
+(define-mop-shim class-direct-slots* class-direct-slots (class))
+(define-mop-shim class-finalized-p* class-finalized-p (class))
+(define-mop-shim specializer-direct-methods* specializer-direct-methods (specializer)
+  "The methods specialized on SPECIALIZER, a class: every generic function's.")
+(define-mop-shim method-generic-function* method-generic-function (method))
+(define-mop-shim method-specializers* method-specializers (method))
+(define-mop-shim generic-function-name* generic-function-name (generic-function))
+(define-mop-shim slot-definition-name* slot-definition-name (slot))
+(define-mop-shim slot-definition-type* slot-definition-type (slot))
+(define-mop-shim slot-definition-allocation* slot-definition-allocation (slot))
+(define-mop-shim slot-definition-initargs* slot-definition-initargs (slot))
+(define-mop-shim slot-definition-initform* slot-definition-initform (slot))
+(define-mop-shim slot-definition-initfunction* slot-definition-initfunction (slot))
+(define-mop-shim slot-definition-readers* slot-definition-readers (slot)
+  "A DIRECT slot definition's readers; an effective one has none.")
+(define-mop-shim slot-definition-writers* slot-definition-writers (slot))
+
+(defun finalized-class (class)
+  "CLASS, finalized if it was not: a class's precedence list and its slots are
+not there until then, and a class nothing has been made of is not."
   (ignore-errors
-   #+sbcl (progn (unless (sb-mop:class-finalized-p class) (sb-mop:finalize-inheritance class))
-                 (mapcar #'sb-mop:slot-definition-name (sb-mop:class-slots class)))
-   #+ecl (progn (unless (clos:class-finalized-p class) (clos:finalize-inheritance class))
-                (mapcar #'clos:slot-definition-name (clos:class-slots class)))))
+   (unless (class-finalized-p* class)
+     #+sbcl (sb-mop:finalize-inheritance class)
+     #+ecl (clos:finalize-inheritance class)))
+  class)
+
+(defun class-precedence-list* (class)
+  (ignore-errors
+   #+sbcl (sb-mop:class-precedence-list (finalized-class class))
+   #+ecl (clos:class-precedence-list (finalized-class class))))
+
+(defun class-effective-slots* (class)
+  "CLASS's slots, its own and inherited, in order.  Standard classes and
+structure classes alike, on both."
+  (ignore-errors
+   #+sbcl (sb-mop:class-slots (finalized-class class))
+   #+ecl (clos:class-slots (finalized-class class))))
+
+(defun class-slot-names (class)
+  "The names of CLASS's slots, in order; NIL when it has none or will not say."
+  (mapcar #'slot-definition-name* (class-effective-slots* class)))
 
 (defun class-direct-subclass-names (class)
-  (ignore-errors
-   (mapcar #'class-name
-           #+sbcl (sb-mop:class-direct-subclasses class)
-           #+ecl (clos:class-direct-subclasses class))))
+  (mapcar #'class-name (class-direct-subclasses* class)))
 
 (defun class-precedence-names (class)
-  (ignore-errors
-   #+sbcl (progn (unless (sb-mop:class-finalized-p class) (sb-mop:finalize-inheritance class))
-                 (mapcar #'class-name (sb-mop:class-precedence-list class)))
-   #+ecl (progn (unless (clos:class-finalized-p class) (clos:finalize-inheritance class))
-                (mapcar #'class-name (clos:class-precedence-list class)))))
+  (mapcar #'class-name (class-precedence-list* class)))
 
 (defun function-disassembly (function)
   "What the compiler made of FUNCTION, as text, or NIL where that cannot be

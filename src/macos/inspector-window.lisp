@@ -83,7 +83,9 @@ scene can be."
    ;; Whether the pointer is over it, and what was last said about where it
    ;; is: (TEXT X Y), in the canvas's units.
    (inside :initform nil :accessor drawing-view-inside)
-   (readout :initform nil :accessor drawing-view-readout))
+   (readout :initform nil :accessor drawing-view-readout)
+   ;; Where the button went down, in the view's own points: (X . Y), or NIL.
+   (press :initform nil :accessor drawing-view-press))
   (:objc-class-name "LispListenerInspectorDrawing")
   (:objc-superclass-name "NSView"))
 
@@ -126,6 +128,46 @@ scene can be."
           (inspector-request-readout inspector (drawing-view-pane self)
                                      (car canvas) (cdr canvas))))
     (error (condition) (note "inspector mouseMoved: ~a" condition))))
+
+;;; A click -- down and up without moving off the spot -- walks into whatever
+;;; the drawing's OPEN says is there.  Asked on the worker, like the readout.
+(defparameter *drawing-click-slop* 4d0
+  "How far, in points, the pointer may move between down and up and still be
+a click rather than a drag.")
+
+(defun drawing-view-point (pointer event)
+  (let ((point (objc:invoke pointer "convertPoint:fromView:"
+                            (objc:invoke event "locationInWindow") nil)))
+    (cons (aref point 0) (aref point 1))))
+
+(objc:define-objc-method ("mouseDown:" :void)
+    ((self inspector-drawing-view pointer) (event objc:objc-object-pointer))
+  (handler-case (setf (drawing-view-press self) (drawing-view-point pointer event))
+    (error (condition) (note "inspector mouseDown: ~a" condition))))
+
+(objc:define-objc-method ("mouseUp:" :void)
+    ((self inspector-drawing-view pointer) (event objc:objc-object-pointer))
+  (handler-case
+      (let ((press (shiftf (drawing-view-press self) nil))
+            (point (drawing-view-point pointer event))
+            (scene (drawing-view-scene self))
+            (inspector (drawing-view-inspector self)))
+        (when (and press inspector scene (drawing-scene-open scene)
+                   (<= (abs (- (car point) (car press))) *drawing-click-slop*)
+                   (<= (abs (- (cdr point) (cdr press))) *drawing-click-slop*))
+          (let* ((bounds (objc:invoke pointer "bounds"))
+                 (canvas (canvas-point-from-view (car point) (cdr point)
+                                                 (aref bounds 2) (aref bounds 3))))
+            (inspector-open-at-point inspector (drawing-view-pane self)
+                                     (car canvas) (cdr canvas)))))
+    (error (condition) (note "inspector mouseUp: ~a" condition))))
+
+;;; The inspector's window is often not key -- the keyboard stays at the
+;;; prompt -- and the click that brings it forward should land as well.
+(objc:define-objc-method ("acceptsFirstMouse:" objc:objc-bool)
+    ((self inspector-drawing-view) (event objc:objc-object-pointer))
+  (declare (ignorable event))
+  t)
 
 (objc:define-objc-method ("mouseExited:" :void)
     ((self inspector-drawing-view pointer) (event objc:objc-object-pointer))

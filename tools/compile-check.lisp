@@ -46,7 +46,7 @@
     "keymap" "transcript" "completion" "paren-highlight" "arglist" "editor" "paredit-view" "history-search"
     "streams" "config"
     "restarts" "preferences" "files" "canvas" "places" "views" "inspector"
-    "standard-views" "objc-views" "examples" "repl"))
+    "class-graph" "standard-views" "objc-views" "examples" "repl"))
 
 (defparameter *front-ends*
   '(("macos" "macos/view" "macos/window" "macos/restarts-panel"

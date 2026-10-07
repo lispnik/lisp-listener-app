@@ -826,6 +826,20 @@ pointer moves, it is answered for where the pointer is, not for where it was."
                           (show-inspector-readout inspector pane text x y)))
                        (t (setf (inspector-readout inspector) text))))))))))))
 
+(defun inspector-open-at-point (inspector pane x y)
+  "Walk INSPECTOR into whatever PANE's drawing has at the point (X, Y), in the
+canvas's units: a click on it, or a tap.  Nothing there, nothing happens."
+  (inspector-update
+   inspector
+   (lambda ()
+     (let* ((model (inspector-model inspector))
+            (pane-model (and model (nth pane (model-panes model)))))
+       (when pane-model
+         (multiple-value-bind (object label)
+             (drawing-open (pane-model-drawing pane-model) x y)
+           (when object
+             (walk-into inspector object label))))))))
+
 (defun readout-shapes (text x y)
   "What to paint over a drawing to say TEXT about the point (X, Y): a crosshair
 there and the words beside it, as the canvas's own shapes -- so that whatever
@@ -840,7 +854,9 @@ paints a drawing paints its readout too, on either toolkit."
      (when (and text (plusp (length text)))
        (let* ((size 7)
               (width (+ 5 (* 0.62 size (length text))))
-              (left (if (> (+ x 4 width) 100) (- x 4 width) (+ x 4)))
+              ;; Beside the point, on whichever side has room; and never past
+              ;; the left edge, which a long label on the left half reached.
+              (left (max -99 (if (> (+ x 4 width) 100) (- x 4 width) (+ x 4))))
               (bottom (if (> (+ y 16) 100) (- y 15) (+ y 4))))
          (canvas:color 0 0 0 0.8)
          (canvas:box left bottom width 11)

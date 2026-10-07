@@ -77,9 +77,15 @@ into UIKit."
    ;; Whether a finger is on it, and what was last said about where it is:
    ;; (TEXT X Y), in the canvas's units.
    (inside :initform nil :accessor drawing-view-inside)
-   (readout :initform nil :accessor drawing-view-readout))
+   (readout :initform nil :accessor drawing-view-readout)
+   ;; Where the finger landed, in the view's own points: (X . Y), or NIL.
+   (press :initform nil :accessor drawing-view-press))
   (:objc-class-name "LispListenerInspectorDrawing")
   (:objc-superclass-name "UIView"))
+
+(defparameter *drawing-tap-slop* 8d0
+  "How far, in points, a finger may move between landing and lifting and
+still be a tap rather than a drag.")
 
 (objc:define-objc-method ("drawRect:" :void)
     ((self inspector-drawing-view pointer) (dirty cocoa:ns-rect))
@@ -97,16 +103,27 @@ into UIKit."
 
 (defun inspector-drawing-touch (inspector phase x y)
   "A finger on the drawing at (X, Y) in the view's own coordinates: PHASE is
-:MOVE while it is down, and :UP when it lifts.  Down, the view's readout is
-asked what is under it; lifted, what was said is taken away."
+:DOWN as it lands, :MOVE while it is down, and :UP when it lifts -- or :CANCEL,
+when UIKit takes it away.  Down, the view's readout is asked what is under it;
+lifted, what was said is taken away; and lifted where it landed, a tap, the
+drawing's OPEN is asked what is there to walk into."
   (let* ((object (inspector-part inspector :drawing-object))
          (view (inspector-part inspector :drawing))
          (bounds (objc:invoke view "bounds")))
-    (cond ((eq phase :up)
-           (setf (drawing-view-inside object) nil
-                 (drawing-view-readout object) nil)
-           (objc:invoke view "setNeedsDisplay"))
+    (cond ((member phase '(:up :cancel))
+           (let ((press (shiftf (drawing-view-press object) nil))
+                 (scene (drawing-view-scene object)))
+             (setf (drawing-view-inside object) nil
+                   (drawing-view-readout object) nil)
+             (objc:invoke view "setNeedsDisplay")
+             (when (and (eq phase :up) press scene (drawing-scene-open scene)
+                        (<= (abs (- x (car press))) *drawing-tap-slop*)
+                        (<= (abs (- y (cdr press))) *drawing-tap-slop*))
+               (let ((point (canvas-point-from-view x y (aref bounds 2) (aref bounds 3))))
+                 (inspector-open-at-point inspector 0 (car point) (cdr point))))))
           (t
+           (when (eq phase :down)
+             (setf (drawing-view-press object) (cons x y)))
            (setf (drawing-view-inside object) t)
            (when (and (drawing-view-scene object)
                       (drawing-scene-readout (drawing-view-scene object)))
@@ -123,12 +140,13 @@ asked what is under it; lifted, what was said is taken away."
       (objc:invoke (inspector-part inspector :drawing) "setNeedsDisplay")
       t)))
 
-;;; UIGestureRecognizerState is 1 as it begins and 2 while it changes;
-;;; everything after is the end of it.
+;;; UIGestureRecognizerState is 1 as it begins, 2 while it changes and 3 as it
+;;; ends; after that it was cancelled, or failed.
 (define-sheet-method ("sheetTouch:" :void) ((recognizer objc:objc-object-pointer))
   (let ((point (objc:invoke recognizer "locationInView:" (inspector-part inspector :drawing))))
     (inspector-drawing-touch inspector
-                             (if (member (objc:invoke recognizer "state") '(1 2)) :move :up)
+                             (case (objc:invoke recognizer "state")
+                               (1 :down) (2 :move) (3 :up) (t :cancel))
                              (aref point 0) (aref point 1))))
 
 ;;; The table ------------------------------------------------------------------------

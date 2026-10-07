@@ -55,6 +55,7 @@
                  (:file "places")
                  (:file "views")
                  (:file "inspector")
+                 (:file "class-graph")
                  (:file "standard-views")
                  (:file "objc-views")
                  ;; Read into the image when "examples" is compiled; named here

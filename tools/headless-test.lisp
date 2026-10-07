@@ -56,7 +56,7 @@
                           "completion" "paren-highlight" "arglist" "editor" "paredit-view" "history-search"
                           "streams" "config"
                           "restarts" "preferences" "files" "canvas" "places" "views"
-                          "inspector" "standard-views" "objc-views" "examples" "repl")
+                          "inspector" "class-graph" "standard-views" "objc-views" "examples" "repl")
                         #+sbcl '("macos/view" "macos/window" "macos/restarts-panel"
                                  "macos/history-panel" "macos/canvas-window"
                                  "macos/preferences-window" "macos/inspector-window"
@@ -1926,6 +1926,87 @@ bound away from the front end's own -- a test has no business writing into
                              (member (view-name view) '(test-needy-view test-native-view)))
                            *views*)))
 
+;;; A diamond: D inherits from B and C, which both inherit from A.
+(defclass test-a () ((weight :initarg :weight :type integer :initform 1 :reader a-weight)))
+(defclass test-b (test-a) ())
+(defclass test-c (test-a) ((colour :initarg :colour :accessor c-colour)))
+(defclass test-d (test-b test-c) ())
+(defgeneric test-polish (thing))
+(defmethod test-polish ((thing test-d)) thing)
+
+(defcase case-class-views "Classes: a graph of the hierarchy to click, and what a class is."
+  (let ((d (find-class 'test-d)))
+    (multiple-value-bind (nodes edges) (layout-class-graph d)
+      (flet ((node (name)
+               (find (find-class name) nodes :key #'node-class)))
+        (check (and (node 'test-a) (node 'test-b) (node 'test-c) (node t))
+               "the graph of a class has all it inherits from")
+        (check (and (> (node-y (node 'test-a)) (node-y (node 'test-b)))
+                    (= (node-y (node 'test-b)) (node-y (node 'test-c)))
+                    (> (node-y (node 'test-b)) (node-y (node 'test-d))))
+               "the diamond's top above both its sides, and they above the class")
+        (check (every (lambda (other) (>= (node-y (node t)) (node-y other))) nodes)
+               "and T at the top of it all")
+        (check (= 4 (count-if (lambda (edge)
+                                (member (node-class (car edge))
+                                        (mapcar #'find-class '(test-b test-c test-d))))
+                              edges))
+               "an edge from each class to each superclass: four in the diamond")
+        (check (every (lambda (edge) (> (node-y (cdr edge)) (node-y (car edge)))) edges)
+               "and every edge points up")
+        (let ((scene (view-scene (find-view 'class-graph-view) d '()))
+              (b (node 'test-b)))
+          (check (search "test-b" (drawing-readout scene (node-x b) (node-y b)))
+                 "the readout names the class under the point")
+          (check (eq (find-class 'test-b) (drawing-open scene (node-x b) (node-y b)))
+                 "and a click there opens it")
+          (check (null (drawing-open scene 99 -99)) "a click on nothing opens nothing")
+          (let ((inspector (make-inspector d)))
+            (inspector-refresh inspector)
+            (inspector-select-view inspector 1 'class-graph-view)
+            (inspector-open-at-point inspector 1 (node-x b) (node-y b))
+            (check (eq (find-class 'test-b) (first (last (model-steps (inspector-model inspector)))))
+                   "an inspector clicked on a class walks into it"))))))
+  (multiple-value-bind (nodes) (layout-class-graph (find-class 'standard-object)
+                                                   :depth 2 :width-limit 6)
+    (check (every (lambda (layer)
+                    (<= (count layer nodes :key #'node-layer) 6))
+                  (remove-duplicates (mapcar #'node-layer nodes)))
+           "no layer wider than its limit, even under STANDARD-OBJECT")
+    (let ((more (find-if #'node-more nodes)))
+      (check (and more (plusp (length (node-more more))))
+             "the rest are one node, \"+N more\", holding them")
+      (when more
+        (check (listp (drawing-open (view-scene (find-view 'class-graph-view)
+                                                (find-class 'standard-object)
+                                                '(:depth 2))
+                                    (node-x more) (node-y more)))
+               "and a click there opens them as a list"))))
+  (flet ((shown (object &optional view &rest options)
+           (with-output-to-string (*standard-output*)
+             (apply #'inspector:show object view options))))
+    (check (equal '("Class" "Graph") (subseq (inspector:views (find-class 'test-d)) 0 2))
+           "a class opens on its Class view and its Graph")
+    (let ((inspector (make-inspector (find-class 'test-d))))
+      (inspector-refresh inspector)
+      (let ((row (position-if (lambda (cells) (search "test-b" (first cells)))
+                              (pane-rows inspector 0))))
+        (check row "Class: a row for each direct superclass")
+        (when row
+          (inspector-open-row inspector 0 row)
+          (check (eq (find-class 'test-b) (inspector-object inspector))
+                 "which walks into the class itself, not its name"))))
+    (let ((slots (shown (find-class 'test-d) "Slots")))
+      (check (and (search "weight" slots) (search "test-a" slots) (search "integer" slots)
+                  (search ":weight" slots) (search "a-weight" slots))
+             "Slots: each slot, where it is declared, its type, initarg and reader")
+      (check (and (search "colour" slots) (search "c-colour" slots) (search "(setf c-colour)" slots))
+             "and an accessor's writer as well as its reader"))
+    (check (search "test-polish" (shown (find-class 'test-d) "Methods"))
+           "Methods: the generic functions specialized on the class")
+    (check (not (member "Methods" (inspector:views (find-class 'test-b)) :test #'string=))
+           "and a class with none has no Methods view")))
+
 (defcase case-readout "Readouts: what a drawing says about a point on it."
   (let* ((bytes (byte-vector 0 0 0 255))
          (inspector (make-inspector bytes)))
@@ -2075,7 +2156,7 @@ bound away from the front end's own -- a test has no business writing into
                 case-prompt-is-recorded
                 case-canvas case-turtle case-examples case-preferences
                 case-places case-views case-scenes case-inspector
-                case-more-views case-readout case-time-limit case-arglist case-editor))
+                case-more-views case-class-views case-readout case-time-limit case-arglist case-editor))
   (funcall case))
 
 (format t "~&~%headless-test: ~d check~:p, ~d failure~:p~%" *checks* *failures*)
