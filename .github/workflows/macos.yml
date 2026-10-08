@@ -122,6 +122,13 @@ jobs:
           path: heml
           submodules: true
 
+      - name: Put heml's checkout on a branch
+        # heml reads its version out of .git/HEAD and expects `ref: refs/...'
+        # there; checked out at a commit, HEAD is the bare hash, and building
+        # it fails looking for .git/<the hash less five characters>.  A local
+        # branch where the checkout is makes HEAD a ref again, pinned or not.
+        run: git -C heml checkout -q -B ci-heml
+
       - name: Settle on where the safepoint SBCL lives
         # Outside the workspace on purpose: SBCL's own sources must never land
         # on the source registry.  Not under ~/.local either, which is where
