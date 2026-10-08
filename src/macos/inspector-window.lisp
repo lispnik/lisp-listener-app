@@ -250,6 +250,35 @@ each stretch of the table that is scrolled to."
                   (table-row (pane-table-model pane-model) index))))
     (and row (row-header-p row) t)))
 
+(defvar *heading-cell* nil
+  "The cell a section's heading is drawn with, across the whole row: one, made
+on first use, kept, and shared by every table.  Thread 1.")
+
+(defun heading-cell ()
+  (unless (live-pointer-p *heading-cell*)
+    (setf *heading-cell* (objc:invoke (objc:invoke "NSTextFieldCell" "alloc")
+                                      "initTextCell:" ""))
+    (objc:invoke *heading-cell* "setFont:" (inspector-font t))
+    (objc:invoke *heading-cell* "setLineBreakMode:" 4))   ; truncating tail
+  *heading-cell*)
+
+;;; A group row -- a section's heading -- is drawn by one cell across the row
+;;; when this answers one for no column; without it, AppKit draws the heading
+;;; inside the first column, and "Superclasses" came out "Superclass...".
+;;; Every other cell is its column's own, as it would be with no delegate.
+(define-pane-method ("tableView:dataCellForTableColumn:row:" objc:objc-object-pointer
+                     :on-error (cffi:null-pointer))
+    ((table objc:objc-object-pointer)
+     (column objc:objc-object-pointer)
+     (index (:signed :long-long)))
+  (if (cffi:null-pointer-p column)
+      (let ((row (and (pane-table-model pane-model)
+                      (table-row (pane-table-model pane-model) index))))
+        (if (and row (row-header-p row))
+            (heading-cell)
+            (cffi:null-pointer)))
+      (objc:invoke column "dataCellForRow:" index)))
+
 (define-pane-method ("tableView:shouldSelectRow:" objc:objc-bool)
     ((table objc:objc-object-pointer) (index (:signed :long-long)))
   (let ((row (and (pane-table-model pane-model)
