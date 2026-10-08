@@ -51,12 +51,7 @@ env:
   # dependencies come from its own ocicl.csv, and its vendored ones from its
   # submodules.
   HEML_REPO: lispnik/heml
-  # PINNED, for now, to the heml of the last run green on Intel (2026-10-06).
-  # With heml's master since then, the debugger test stalls thread 1 on
-  # x86-64 once heml is open -- minutes on a wait of fifteen seconds, then
-  # Evaluate Defun never returns -- while arm64 passes in under a second.
-  # Back to master once heml is fixed there.
-  HEML_REF: 4a56adb74e5c8fcdf4cc18aeaf618cebbcd88c1e
+  HEML_REF: master
   # A pinned release tag, never a branch: a branch name in a cache key stops
   # tracking what it names the moment the branch moves, and the cache then hands
   # back a binary built from something else.
