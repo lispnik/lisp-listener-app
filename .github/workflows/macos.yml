@@ -315,10 +315,14 @@ jobs:
         # Loading only, not `asdf:make'.  Building the bundle is the previous
         # step's job and doing it twice buys nothing; what is in question here is
         # whether the lockfile names everything the system needs.
+        #
+        # With its submodule, as the README's clone is: sexp-edit is vendored,
+        # not pinned in ocicl.csv, and a plain clone leaves vendor/sexp-edit
+        # empty -- `Component "sexp-edit" not found'.
         run: |
           set -eux
           rm -rf "$RUNNER_TEMP/fresh"
-          git clone --quiet lisp-listener-app "$RUNNER_TEMP/fresh"
+          git clone --quiet --recurse-submodules lisp-listener-app "$RUNNER_TEMP/fresh"
           cd "$RUNNER_TEMP/fresh"
           export PATH="$HOME/.local/bin:$PATH"
           # Retried as the first install is, and for the same reason: ghcr.io
