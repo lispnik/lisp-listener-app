@@ -162,6 +162,7 @@ which wants to know whether there is an &BODY in it."
 (define-mop-shim method-generic-function* method-generic-function (method))
 (define-mop-shim method-specializers* method-specializers (method))
 (define-mop-shim generic-function-name* generic-function-name (generic-function))
+(define-mop-shim generic-function-methods* generic-function-methods (generic-function))
 (define-mop-shim slot-definition-name* slot-definition-name (slot))
 (define-mop-shim slot-definition-type* slot-definition-type (slot))
 (define-mop-shim slot-definition-allocation* slot-definition-allocation (slot))

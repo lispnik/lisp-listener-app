@@ -369,7 +369,8 @@ NSTextView and UITextView share.
     A class has Class (priority 2: what it is, and its direct superclasses and
     subclasses as rows to walk into), Slots (every effective slot, where it is
     declared, its type, allocation, initargs, initform and accessors), Methods
-    (what is specialized on it) and Hierarchy. The metaobject protocol is
+    (what is specialized on it) and Hierarchy; a generic function opens on
+    its own Methods, each row a method to walk into. The metaobject protocol is
     reached only through the `*` shims in `impl.lisp`
     (`class-direct-superclasses*` and the rest), `sb-mop:` or `clos:`.
   - `src/class-graph.lisp` — the class's **Graph** view (priority 1, so it

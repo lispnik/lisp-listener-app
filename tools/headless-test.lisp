@@ -2005,7 +2005,11 @@ bound away from the front end's own -- a test has no business writing into
     (check (search "test-polish" (shown (find-class 'test-d) "Methods"))
            "Methods: the generic functions specialized on the class")
     (check (not (member "Methods" (inspector:views (find-class 'test-b)) :test #'string=))
-           "and a class with none has no Methods view")))
+           "and a class with none has no Methods view")
+    (check (equal "Methods" (first (inspector:views #'test-polish)))
+           "a generic function opens on its methods")
+    (check (search "test-d" (shown #'test-polish "Methods"))
+           "each by what it is specialized on")))
 
 (defcase case-readout "Readouts: what a drawing says about a point on it."
   (let* ((bytes (byte-vector 0 0 0 255))

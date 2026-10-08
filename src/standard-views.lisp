@@ -310,6 +310,27 @@ into its generic function."
                      :count (length rows)
                      :row (lambda (index) (aref rows index)))))
 
+(defun method-specializer-labels (method)
+  (format nil "~{~a~^, ~}" (mapcar #'specializer-label (method-specializers* method))))
+
+(inspector:define-view (generic-function-methods-view :title "Methods" :type generic-function
+                                                      :priority 1)
+    (function)
+  "A generic function's methods: what each is specialized on, and its
+qualifiers.  Each row walks into the method."
+  (let ((rows (coerce
+               (sort (loop for method in (generic-function-methods* function)
+                           collect (list (method-specializer-labels method)
+                                         (format nil "~{~(~s~)~^ ~}" (method-qualifiers method))
+                                         (inspector:value method)))
+                     #'string< :key #'first)
+               'vector)))
+    (if (zerop (length rows))
+        (inspector:table :rows (nothing-rows '()))
+        (inspector:table :columns '("Specializers" "Qualifiers" "")
+                         :count (length rows)
+                         :row (lambda (index) (aref rows index))))))
+
 (inspector:define-view (function-view :title "Function" :type function)
     (function)
   "A function's lambda list and documentation."
