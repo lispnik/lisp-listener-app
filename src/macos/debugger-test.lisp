@@ -1216,7 +1216,12 @@ graph, and a click on it walking into it."
         (check-step (wait-for (lambda () (eq (inspector-object inspector)
                                              (find-class 'cl-user::cut-gem)))
                               :timeout 10)
-                    "and a click on it walks into it")
+                    ;; Once, on Intel, it did not, and said nothing of why.
+                    "and a click on it walks into it~@[ -- at ~a~]~@[, saying ~a~]"
+                    (and (not (eq (inspector-object inspector)
+                                  (find-class 'cl-user::cut-gem)))
+                         (inspector-print (inspector-object inspector) 60))
+                    (inspector-message inspector))
         (check-step (wait-for (lambda () (equal (inspector-pane-titles inspector)
                                                 '("Class" "Graph")))
                               :timeout 10)
