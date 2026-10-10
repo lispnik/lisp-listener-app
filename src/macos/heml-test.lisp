@@ -35,6 +35,10 @@
                      (menu-item-present-p "File" "Open in Editor…")
                      (menu-item-present-p "Listener" "Edit Definition"))
                 "File > Show Editor, Open in Editor... and Listener > Edit Definition are there")
+    ;; No file icon in heml's title bar: AppKit fetches it from IconServices
+    ;; by a synchronous call on thread 1, and an Intel CI runner's icon
+    ;; service takes minutes to answer -- the whole test stalled behind it.
+    (setf heml.cocoa:*title-file-icon* nil)
     ;; (ed "file") at the prompt, as a person types it.
     (type-and-submit listener (format nil "(ed ~s)" (namestring file)))
     (check-step (wait-for #'heml.cocoa:hosted-running-p :timeout 30)
