@@ -145,6 +145,11 @@ a click rather than a drag.")
   (handler-case (setf (drawing-view-press self) (drawing-view-point pointer event))
     (error (condition) (note "inspector mouseDown: ~a" condition))))
 
+(defvar *last-drawing-click* nil
+  "What the last click on an inspector's drawing came to, as a plist: where it
+was pressed and released, and whether it was a click to open.  For a driven
+test that clicks and sees nothing happen.")
+
 (objc:define-objc-method ("mouseUp:" :void)
     ((self inspector-drawing-view pointer) (event objc:objc-object-pointer))
   (handler-case
@@ -152,6 +157,10 @@ a click rather than a drag.")
             (point (drawing-view-point pointer event))
             (scene (drawing-view-scene self))
             (inspector (drawing-view-inspector self)))
+        (setf *last-drawing-click*
+              (list :press press :release point :inspector (and inspector t)
+                    :scene (and scene t) :open (and scene (drawing-scene-open scene) t)
+                    :pane (drawing-view-pane self)))
         (when (and press inspector scene (drawing-scene-open scene)
                    (<= (abs (- (car point) (car press))) *drawing-click-slop*)
                    (<= (abs (- (cdr point) (cdr press))) *drawing-click-slop*))

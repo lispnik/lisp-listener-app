@@ -1217,11 +1217,17 @@ graph, and a click on it walking into it."
                                              (find-class 'cl-user::cut-gem)))
                               :timeout 10)
                     ;; Once, on Intel, it did not, and said nothing of why.
-                    "and a click on it walks into it~@[ -- at ~a~]~@[, saying ~a~]"
+                    "and a click on it walks into it~@[ -- at ~a~]~@[, saying ~a~]~@[; the click: ~s~]~@[; the open: ~s~]"
                     (and (not (eq (inspector-object inspector)
                                   (find-class 'cl-user::cut-gem)))
                          (inspector-print (inspector-object inspector) 60))
-                    (inspector-message inspector))
+                    (inspector-message inspector)
+                    (and (not (eq (inspector-object inspector)
+                                  (find-class 'cl-user::cut-gem)))
+                         (list* :sent (list x y) *last-drawing-click*))
+                    (and (not (eq (inspector-object inspector)
+                                  (find-class 'cl-user::cut-gem)))
+                         *last-open-at-point*))
         (check-step (wait-for (lambda () (equal (inspector-pane-titles inspector)
                                                 '("Class" "Graph")))
                               :timeout 10)

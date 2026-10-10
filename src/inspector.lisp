@@ -826,6 +826,10 @@ pointer moves, it is answered for where the pointer is, not for where it was."
                           (show-inspector-readout inspector pane text x y)))
                        (t (setf (inspector-readout inspector) text))))))))))))
 
+(defvar *last-open-at-point* nil
+  "What INSPECTOR-OPEN-AT-POINT last found, as a plist: the point, whether the
+pane had a drawing, and the object there.  For a driven test.")
+
 (defun inspector-open-at-point (inspector pane x y)
   "Walk INSPECTOR into whatever PANE's drawing has at the point (X, Y), in the
 canvas's units: a click on it, or a tap.  Nothing there, nothing happens."
@@ -833,12 +837,14 @@ canvas's units: a click on it, or a tap.  Nothing there, nothing happens."
    inspector
    (lambda ()
      (let* ((model (inspector-model inspector))
-            (pane-model (and model (nth pane (model-panes model)))))
-       (when pane-model
-         (multiple-value-bind (object label)
-             (drawing-open (pane-model-drawing pane-model) x y)
-           (when object
-             (walk-into inspector object label))))))))
+            (pane-model (and model (nth pane (model-panes model))))
+            (drawing (and pane-model (pane-model-drawing pane-model))))
+       (multiple-value-bind (object label) (and drawing (drawing-open drawing x y))
+         (setf *last-open-at-point*
+               (list :pane pane :x x :y y :model (and model t) :drawing (and drawing t)
+                     :object object))
+         (when object
+           (walk-into inspector object label)))))))
 
 (defun readout-shapes (text x y)
   "What to paint over a drawing to say TEXT about the point (X, Y): a crosshair
