@@ -1182,10 +1182,6 @@ graph, and a click on it walking into it."
          (right (inspector-pane-parts inspector 1))
          (drawing (getf right :drawing))
          (object (getf right :drawing-object))
-         (bounds (objc:invoke drawing "bounds"))
-         (width (aref bounds 2))
-         (height (aref bounds 3))
-         (scale (/ (min width height) 200d0))
          (target (find "cut-gem" (layout-class-graph (find-class 'cl-user::ring-stone))
                        :key #'node-label :test #'string=)))
     (check-step (equal (inspector-pane-titles inspector) '("Class" "Graph"))
@@ -1193,15 +1189,26 @@ graph, and a click on it walking into it."
                 (inspector-pane-titles inspector))
     (check-step target "the graph has a node for the superclass cut-gem")
     (when target
-      ;; The node's centre: the canvas's units to the view's points -- the
-      ;; view is flipped -- and on to the window's.
-      (let* ((point (objc:invoke drawing "convertPoint:toView:"
-                                 (vector (+ (/ width 2) (* scale (node-x target)))
-                                         (- (/ height 2) (* scale (node-y target))))
-                                 nil))
-             (x (aref point 0))
-             (y (aref point 1)))
-        (objc:invoke drawing "mouseMoved:" (window-mouse-test-event window 5 x y))
+      (flet ((node-in-window ()
+               ;; The node's centre: the canvas's units to the view's points --
+               ;; the view is flipped -- and on to the window's.  Asked again
+               ;; before each event, with the window's layout finished first:
+               ;; computed once, on a slow Intel runner, the right pane was
+               ;; still being placed, and by the click it had moved -- the
+               ;; click landed off the drawing's left edge.
+               (objc:invoke (objc:invoke window "contentView") "layoutSubtreeIfNeeded")
+               (let* ((bounds (objc:invoke drawing "bounds"))
+                      (width (aref bounds 2))
+                      (height (aref bounds 3))
+                      (scale (/ (max 1d0 (min width height)) 200d0))
+                      (point (objc:invoke drawing "convertPoint:toView:"
+                                          (vector (+ (/ width 2) (* scale (node-x target)))
+                                                  (- (/ height 2) (* scale (node-y target))))
+                                          nil)))
+                 (values (aref point 0) (aref point 1)))))
+      (multiple-value-bind (x y) (node-in-window)
+        (objc:invoke drawing "mouseMoved:" (window-mouse-test-event window 5 x y)))
+      (let (x y)
         (check-step (wait-for (lambda () (let ((readout (drawing-view-readout object)))
                                            (and readout (search "cut-gem" (first readout)))))
                               :timeout 10)
@@ -1211,6 +1218,7 @@ graph, and a click on it walking into it."
         (write-window-png window (namestring (merge-pathnames
                                               "inspector-class-graph.png"
                                               (uiop:ensure-directory-pathname directory))))
+        (multiple-value-setq (x y) (node-in-window))
         (objc:invoke drawing "mouseDown:" (window-mouse-test-event window 1 x y))
         (objc:invoke drawing "mouseUp:" (window-mouse-test-event window 2 x y))
         (check-step (wait-for (lambda () (eq (inspector-object inspector)
@@ -1231,7 +1239,7 @@ graph, and a click on it walking into it."
         (check-step (wait-for (lambda () (equal (inspector-pane-titles inspector)
                                                 '("Class" "Graph")))
                               :timeout 10)
-                    "which is a class, shown the same way")))
+                    "which is a class, shown the same way"))))
     (hide-inspectors)
     (pump-for 0.3d0)
     (check-step (null *inspectors*) "and it closes")))
